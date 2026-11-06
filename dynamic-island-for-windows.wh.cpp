@@ -1468,6 +1468,8 @@ struct NotificationSnapshot {
     std::wstring app;
     std::wstring title;
     std::wstring body;
+    std::wstring line1;  // the toast's own first and second text lines, untouched
+    std::wstring line2;  // (title/body above are the legacy card's merged strings)
     PixelsRef icon;
     double expiresAt = 0.0;
 };
@@ -7349,6 +7351,7 @@ DWORD WINAPI NotificationThreadProc(void*) {
     std::set<uint32_t> seenIds;
     bool firstPoll = true;
     bool accessLogged = false;
+    bool appInfoFailureLogged = false;
 
     // The Windows Notification Service (WNS) and UWP subsystem take time to initialize on boot.
     // If this runs too early, instantiating UserNotificationListener::Current()
@@ -7389,7 +7392,10 @@ DWORD WINAPI NotificationThreadProc(void*) {
                                L"\"Let apps access your notifications\", then restart the mod. "
                                L"Retrying meanwhile...");
                     } else {
-                        Wh_Log(L"Notification listener permission not granted or UWP subsystem not ready on boot (status: %d); retrying connection loop...", (int)access);
+                        Wh_Log(L"Notification access NOT granted (status %d = %s). Check Settings > Privacy & security > "
+                               L"Notifications > \"Let apps access your notifications\". Retrying meanwhile...",
+                               (int)access,
+                               access == UserNotificationListenerAccessStatus::Unspecified ? L"Unspecified" : L"Unknown");
                     }
                     accessLogged = true;
                 }
@@ -7397,10 +7403,12 @@ DWORD WINAPI NotificationThreadProc(void*) {
                 continue;
             }
 
-            if (accessLogged) {
-                Wh_Log(L"WinRT UserNotificationListener successfully connected.");
-                accessLogged = false;
-            }
+            // Always say once per connection that access works: the island only
+            // ever sees what is in the notification center, so this line plus the
+            // per-notification line below is how to check the whole chain in the log.
+            Wh_Log(L"Notification access: Allowed. Listening to the notification center "
+                   L"(banners may be turned off in Windows; notifications still arrive here).");
+            accessLogged = false;
 
             while (WaitForSingleObject(g_stopEvent, 0) == WAIT_TIMEOUT) {
                 try {
@@ -7431,15 +7439,29 @@ DWORD WINAPI NotificationThreadProc(void*) {
                             seenIds.insert(id);
 
                             if (g_settings.notificationRespectDnD && g_isDnDActive.load()) {
+                                Wh_Log(L"Notification %u skipped: Do Not Disturb is on (Modules > Respect DND).", id);
                                 continue;
                             }
 
                             NotificationSnapshot snapshot;
                             snapshot.active = true;
                             snapshot.expiresAt = NowSeconds() + 4.0;
-                            auto appInfo = userNotification.AppInfo();
-                            auto displayInfo = appInfo.DisplayInfo();
-                            snapshot.app = displayInfo.DisplayName().c_str();
+                            // AppInfo is optional. On some Windows builds (seen on
+                            // 10.0.26300) it throws E_NOTIMPL for EVERY notification;
+                            // that used to drop them all silently. Now the toast is
+                            // still shown, just without the app's name and logo.
+                            winrt::Windows::ApplicationModel::AppDisplayInfo displayInfo{nullptr};
+                            try {
+                                displayInfo = userNotification.AppInfo().DisplayInfo();
+                                snapshot.app = displayInfo.DisplayName().c_str();
+                            } catch (const winrt::hresult_error& aex) {
+                                if (!appInfoFailureLogged) {
+                                    Wh_Log(L"Notification sender info unavailable on this Windows build (0x%08X); "
+                                           L"showing notifications without the app name and logo.",
+                                           static_cast<unsigned>(aex.to_abi()));
+                                    appInfoFailureLogged = true;
+                                }
+                            }
 
                             // Filter out noisy background console/script engines like PowerShell that fire system toasts unexpectedly
                             const std::wstring lowerApp = ToLowerCopy(snapshot.app);
@@ -7448,7 +7470,7 @@ DWORD WINAPI NotificationThreadProc(void*) {
                                 lowerApp.find(L"cmd.exe") != std::wstring::npos) {
                                 continue;
                             }
-                            try {
+                            if (displayInfo) try {
                                 auto logo = displayInfo.GetLogo({32.0f, 32.0f});
                                 std::vector<uint8_t> logoBytes = ReadWinRtStreamBytes(logo);
                                 if (!logoBytes.empty()) {
@@ -7474,11 +7496,14 @@ DWORD WINAPI NotificationThreadProc(void*) {
                                 if (textElements.Size() > 1) {
                                     snapshot.body = textElements.GetAt(1).Text().c_str();
                                 }
+                                snapshot.line1 = snapshot.title;
+                                snapshot.line2 = snapshot.body;
                             }
 
                             if (snapshot.title.empty()) {
                                 snapshot.title = snapshot.app.empty() ? L"New notification" : snapshot.app;
                             }
+                            if (snapshot.line1.empty()) snapshot.line1 = snapshot.title;
                             if (!snapshot.body.empty()) {
                                 snapshot.title += L" - " + snapshot.body;
                             }
@@ -7487,17 +7512,16 @@ DWORD WINAPI NotificationThreadProc(void*) {
                                 snapshot.title += L"...";
                             }
 
+                            Wh_Log(L"Notification %u received (app: \"%s\").", id,
+                                   snapshot.app.empty() ? L"unknown" : snapshot.app.c_str());
                             {
                                 std::lock_guard lock(g_stateMutex);
                                 g_state.notification = std::move(snapshot);
                             }
                             TriggerNudge();
                         } catch (const winrt::hresult_error& nex) {
-                            if (nex.to_abi() == static_cast<int32_t>(0x80004001) || nex.to_abi() == static_cast<int32_t>(0x80040154)) { // E_NOTIMPL or REGDB_E_CLASSNOTREG
-                                // UWP subsystem not ready, skip without spamming logs
-                            } else {
-                                Wh_Log(L"Failed to parse a notification (0x%08X); skipping.", nex.to_abi());
-                            }
+                            Wh_Log(L"Failed to parse a notification (0x%08X); skipping it.",
+                                   static_cast<unsigned>(nex.to_abi()));
                         } catch (...) {
                             Wh_Log(L"Failed to parse a notification; skipping.");
                         }
@@ -16143,10 +16167,11 @@ class Renderer {
         ComPtr<IDWriteTextLayout> meta =
             DesignType::Layout(Loc(L"now"), Design::Text::IslandMeta, 1.0f, textWidth, titleSpec.lineHeight);
         const float metaWidth = DesignType::Width(meta.Get());
-        const std::wstring& heading = state.notification.app.empty() ? state.notification.title
-                                                                     : state.notification.app;
-        const std::wstring bodyText = state.notification.app.empty() ? state.notification.body
-                                                                     : state.notification.title;
+        // components.md: the title is the toast's first line (the sender), the body
+        // its second line; the app itself is represented by the icon.
+        const NotificationSnapshot& n = state.notification;
+        const std::wstring& heading = !n.line1.empty() ? n.line1 : (!n.app.empty() ? n.app : n.title);
+        const std::wstring& bodyText = !n.line1.empty() ? n.line2 : n.body;
         ComPtr<IDWriteTextLayout> title =
             DesignType::Layout(heading, Design::Text::IslandNotifyTitle, 1.0f,
                                std::max(10.0f, textWidth - metaWidth - 8.0f), titleSpec.lineHeight);
