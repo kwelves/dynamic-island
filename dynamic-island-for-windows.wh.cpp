@@ -2261,6 +2261,20 @@ const wchar_t* Loc(const wchar_t* english) {
         {L"Using Significant Energy", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Значительное энергопотребление", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"No Apps Using Significant Energy", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Нет приложений со значительным энергопотреблением", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"Battery Settings\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Настройки батареи\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"About This PC", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Об этом компьютере", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Windows Settings\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Параметры Windows\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Microsoft Store\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Microsoft Store\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Task Manager\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Диспетчер задач\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Sleep", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Сон", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Restart\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Перезагрузить\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Shut Down\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Выключить\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Lock Screen", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Заблокировать экран", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Log Out\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Выйти из системы\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Feels like", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Ощущается как", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"humidity", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"влажность", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Open Forecast\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Открыть прогноз\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Show On-Screen Keyboard", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Показать экранную клавиатуру", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Keyboard Settings\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Настройки клавиатуры\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"Sound", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Звук", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"Output", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Выход", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"Sound Settings\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Настройки звука\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
@@ -4367,6 +4381,22 @@ constexpr float kPanelOpenDy = -6.0f;          //            translateY -6 -> 0
 constexpr float kPanelCloseScale = 0.98f;      // panel.close 1 -> 0.98
 constexpr float kRowsOffAlpha = 0.35f;         // "модуль выключен -> строки 35 %"
 
+// Menus (components.md "Выпадающее меню (NSMenu-стиль)", prototype .mb-mi*)
+constexpr float kMenuMinW = 220.0f;            // menu-min-w
+constexpr float kRadiusMenu = 12.0f;           // radius-menu
+constexpr float kMenuPadY = 5.0f;              // menu-pad-y
+constexpr float kMenuRowH = 22.0f;             // menu-row-h
+constexpr float kMenuRowInset = 5.0f;          // menu-row-inset
+constexpr float kRadiusMenuRow = 6.0f;         // radius-menu-row
+constexpr float kMenuTextX = 22.0f;            // menu-text-x (check column before it)
+constexpr float kMenuShortcutX = 14.0f;        // menu-shortcut-x
+constexpr float kMenuTitleGap = 28.0f;         // .mb-mi-title padding-right
+constexpr float kSepInsetXMenu = 10.0f;        // sep-inset-x-menu
+constexpr float kMenuCheckGlyph = 11.0f;       // prototype: checkmark 11
+constexpr float kMenuShortcutLitAlpha = 0.8f;  // .mb-mi:hover .mb-mi-key opacity
+constexpr double kMenuBlinkOffSec = 0.070;     // motion.md: the chosen item blinks 70 ms
+constexpr double kMenuBlinkOnSec = 0.060;      //            and the menu closes 60 ms later
+
 // island.states
 struct IslandState {
     float w;
@@ -5153,12 +5183,14 @@ void ReleaseTargetResources();
 std::atomic<uint64_t> g_volumeFlyoutQuietUntil{0};
 
 bool IconToPixels(HICON icon, UINT size, BitmapPixels* outPixels);  // defined further down
+std::wstring PercentEncodeUtf8(const std::wstring& text);            // defined further down
 
 // Click-to-open panels under the bar (defined after TopBar).
 namespace Panels {
 constexpr UINT kCloseMessage = WM_APP + 0x44C;  // input hooks: Esc / a click elsewhere
 constexpr UINT kStepMessage = WM_APP + 0x44D;   // input hooks: wParam 1 = right, 0 = left
 constexpr UINT kDataMessage = WM_APP + 0x44E;   // worker: Bluetooth list / radio result
+constexpr UINT kMenuKeyMessage = WM_APP + 0x44F;  // input hooks: ↑ / ↓ / Enter in a menu (wParam = vk)
 bool HasPanel(int item);
 int OpenItem();
 void Toggle(int item);
@@ -5170,6 +5202,7 @@ bool Animating();
 void OnStatusChanged();
 void OnData();
 void OnIslandExpanded();
+void MenuKey(UINT vk);
 void Highlight(int* item, float* alpha);
 void StartThreads();
 void StopThreads();
@@ -5417,16 +5450,6 @@ void SetPolledFullscreen(bool on) {
     UpdateFullscreenVisibility();
 }
 
-// The Windows logo opens Start, like the Start button: a Win key tap.
-void OpenStartMenu() {
-    INPUT input[2] = {};
-    input[0].type = INPUT_KEYBOARD;
-    input[0].ki.wVk = VK_LWIN;
-    input[1] = input[0];
-    input[1].ki.dwFlags = KEYEVENTF_KEYUP;
-    SendInput(2, input, sizeof(INPUT));
-}
-
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_MOUSEACTIVATE:
@@ -5469,6 +5492,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case Panels::kDataMessage:
             Panels::OnData();
             return 0;
+        case Panels::kMenuKeyMessage:
+            Panels::MenuKey(static_cast<UINT>(wParam));
+            return 0;
         case WM_MOUSEMOVE: {
             // Menu tracking: with a panel open, sliding onto another item switches to
             // its panel in the same frame (motion.md "Menu tracking").
@@ -5499,7 +5525,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     Panels::Toggle(item);  // a second click on the open item closes it
                 } else {
                     Panels::Close(true);
-                    if (item == BarContent::kLogo) OpenStartMenu();
                 }
                 return 0;
             }
@@ -6307,6 +6332,7 @@ DWORD WINAPI WorkerProc(void*) {
 HANDLE g_inputThread = nullptr;
 DWORD g_inputThreadId = 0;
 std::atomic<bool> g_hooksWanted{false};
+std::atomic<bool> g_menuKeys{false};  // a menu is open: ↑ / ↓ / Enter belong to it too
 HHOOK g_mouseHook = nullptr;
 HHOOK g_keyHook = nullptr;
 std::mutex g_bodyMutex;  // leaf lock
@@ -6341,6 +6367,10 @@ LRESULT CALLBACK KeyHookProc(int code, WPARAM wParam, LPARAM lParam) {
                 if (vk == VK_ESCAPE) PostMessageW(h, kCloseMessage, 0, 0);
                 else PostMessageW(h, kStepMessage, vk == VK_RIGHT ? 1 : 0, 0);
             }
+            return 1;
+        }
+        if (g_menuKeys.load(std::memory_order_relaxed) && (vk == VK_UP || vk == VK_DOWN || vk == VK_RETURN)) {
+            if (HWND h = BarStatus::g_notifyHwnd.load()) PostMessageW(h, kMenuKeyMessage, vk, 0);
             return 1;
         }
     }
@@ -6406,10 +6436,13 @@ void StopThreads() {
 }
 
 // ── Panel model ──────────────────────────────────────────────────────────────
-enum class RowKind { Header, Slider, Section, Caption, Item, Sep, Link, CalHeader, CalWeekdays, CalWeek };
+enum class RowKind { Header, Slider, Section, Caption, Item, Sep, Link, CalHeader, CalWeekdays, CalWeek, MenuItem, MenuSep };
 enum Action {
     kNoAction, kSetOutput, kOpenSoundSettings, kOpenBluetoothSettings, kOpenDateSettings,
-    kConnectWifi, kOpenWifiSettings, kOpenBatterySettings
+    kConnectWifi, kOpenWifiSettings, kOpenBatterySettings,
+    // menus
+    kAbout, kWindowsSettings, kStore, kTaskManager, kSleep, kPowerDialog, kLock,
+    kSelectLayout, kOnScreenKeyboard, kKeyboardSettings, kOpenForecast
 };
 
 struct Row {
@@ -6423,6 +6456,8 @@ struct Row {
     PixelsRef icon;       // item: an app icon instead of the circle
     bool lock = false;    // item: trailing lock (secured network)
     bool plain = false;   // item: information only, no hover / press / action
+    bool disabled = false;  // menu item: ink-3, no highlight
+    uintptr_t data = 0;     // menu item: the keyboard layout (HKL) to select
     bool on = false;
     bool check = false;   // output rows: a trailing check while on, the circle stays fill-off
     bool toggle = false;  // header with a switch
@@ -6451,6 +6486,10 @@ float RowHeight(RowKind kind) {
         case RowKind::Link:
         case RowKind::CalWeek:  // a calendar week is a link-height row
             return Design::kPanelLinkH;
+        case RowKind::MenuItem:
+            return Design::kMenuRowH;
+        case RowKind::MenuSep:
+            return Design::kHairline + Design::kSepMarginY * 2.0f;
     }
     return 0.0f;
 }
@@ -6467,6 +6506,12 @@ struct State {
     SpringValue slider;      // slider.jump, 0..1
     std::vector<Row> rows;
     float height = 0.0f;  // design px
+    float width = Design::kPanelW;       // panel 300; a menu is as wide as its content (>= 220)
+    float radius = Design::kRadiusPanel; // radius-panel 16 / radius-menu 12
+    float padY = Design::kPanelPadY;     // panel-pad-y 10 / menu-pad-y 5
+    bool menu = false;
+    int blinkRow = -1;                   // a chosen menu item "blinks" before the menu closes
+    double blinkStart = 0.0;
     int hover = -1;
     int hoverPart = 0;  // calendar header: 1 previous month, 2 next month
     int press = -1;
@@ -6495,9 +6540,15 @@ struct State {
 };
 State g;
 
+// components.md: Control Center panels for Wi-Fi, Bluetooth, Sound, Battery (and
+// the calendar); NSMenu-style menus for the logo, the weather and the layout.
+bool IsMenu(int item) {
+    return item == BarContent::kLogo || item == BarContent::kWeather || item == BarContent::kLayout;
+}
+
 bool HasPanel(int item) {
     return item == BarContent::kVolume || item == BarContent::kBluetooth || item == BarContent::kDate ||
-           item == BarContent::kNetwork || item == BarContent::kBattery;
+           item == BarContent::kNetwork || item == BarContent::kBattery || IsMenu(item);
 }
 
 int OpenItem() {
@@ -6565,9 +6616,120 @@ Row MakeRow(RowKind kind, std::wstring title = L"", int action = kNoAction) {
     return r;
 }
 
+Row MenuRow(std::wstring title, int action, std::wstring shortcut = L"", bool disabled = false) {
+    Row r = MakeRow(RowKind::MenuItem, std::move(title), action);
+    r.value = std::move(shortcut);
+    r.disabled = disabled;
+    return r;
+}
+
+// Keyboard layouts installed for the user, with their localised names.
+struct LayoutEntry {
+    HKL hkl;
+    std::wstring name;
+};
+std::vector<LayoutEntry> InstalledLayouts() {
+    std::vector<LayoutEntry> out;
+    HKL list[32] = {};
+    const int n = GetKeyboardLayoutList(ARRAYSIZE(list), list);
+    for (int i = 0; i < n; ++i) {
+        const LANGID lang = LOWORD(reinterpret_cast<uintptr_t>(list[i]));
+        wchar_t locale[LOCALE_NAME_MAX_LENGTH] = {};
+        wchar_t name[128] = {};
+        if (LCIDToLocaleName(MAKELCID(lang, SORT_DEFAULT), locale, ARRAYSIZE(locale), 0) &&
+            GetLocaleInfoEx(locale, LOCALE_SLOCALIZEDDISPLAYNAME, name, ARRAYSIZE(name))) {
+            std::wstring label = name;
+            if (!label.empty()) label[0] = static_cast<wchar_t>(towupper(label[0]));
+            out.push_back({list[i], label});
+        }
+    }
+    return out;
+}
+
+HKL ForegroundLayout() {
+    HWND fg = GetForegroundWindow();
+    return GetKeyboardLayout(fg ? GetWindowThreadProcessId(fg, nullptr) : 0);
+}
+
+void BuildMenu() {
+    if (g.item == BarContent::kLogo) {
+        // prototype "win", without the "Недавние объекты" submenu.
+        g.rows.push_back(MenuRow(Loc(L"About This PC"), kAbout));
+        g.rows.push_back(MakeRow(RowKind::MenuSep));
+        g.rows.push_back(MenuRow(Loc(L"Windows Settings\u2026"), kWindowsSettings));
+        g.rows.push_back(MenuRow(Loc(L"Microsoft Store\u2026"), kStore));
+        g.rows.push_back(MakeRow(RowKind::MenuSep));
+        g.rows.push_back(MenuRow(Loc(L"Task Manager\u2026"), kTaskManager, L"Ctrl+Shift+Esc"));
+        g.rows.push_back(MakeRow(RowKind::MenuSep));
+        g.rows.push_back(MenuRow(Loc(L"Sleep"), kSleep));
+        g.rows.push_back(MenuRow(Loc(L"Restart\u2026"), kPowerDialog));
+        g.rows.push_back(MenuRow(Loc(L"Shut Down\u2026"), kPowerDialog));
+        g.rows.push_back(MakeRow(RowKind::MenuSep));
+        g.rows.push_back(MenuRow(Loc(L"Lock Screen"), kLock, L"Win+L"));
+        g.rows.push_back(MenuRow(Loc(L"Log Out\u2026"), kPowerDialog));
+    } else if (g.item == BarContent::kWeather) {
+        // prototype "weather": two read-only lines, then "Открыть прогноз…".
+        WeatherSnapshot w;
+        {
+            std::lock_guard lock(g_stateMutex);
+            w = g_state.weather;
+        }
+        std::wstring now = w.city;
+        if (w.hasData) {
+            std::wstring desc = w.weatherDesc;
+            if (!desc.empty()) desc[0] = static_cast<wchar_t>(towlower(desc[0]));
+            now += (now.empty() ? L"" : L" \u00B7 ") + std::to_wstring(static_cast<int>(std::lround(w.temperature))) +
+                   L"\u00B0" + (desc.empty() ? L"" : L", " + desc);
+        }
+        g.rows.push_back(MenuRow(now, kNoAction, L"", true));
+        if (w.hasData && !w.feelsLike.empty()) {
+            std::wstring details = std::wstring(Loc(L"Feels like")) + L" " + w.feelsLike + L"\u00B0";
+            if (!w.humidity.empty()) details += std::wstring(L", ") + Loc(L"humidity") + L" " + w.humidity + L" %";
+            g.rows.push_back(MenuRow(details, kNoAction, L"", true));
+        }
+        g.rows.push_back(MakeRow(RowKind::MenuSep));
+        Row open = MenuRow(Loc(L"Open Forecast\u2026"), kOpenForecast);
+        open.arg = w.city;
+        g.rows.push_back(std::move(open));
+    } else if (g.item == BarContent::kLayout) {
+        // prototype "layout": the layouts as radio items, then the keyboard links.
+        const HKL current = ForegroundLayout();
+        for (const LayoutEntry& entry : InstalledLayouts()) {
+            Row r = MenuRow(entry.name, kSelectLayout);
+            r.data = reinterpret_cast<uintptr_t>(entry.hkl);
+            r.check = entry.hkl == current;
+            g.rows.push_back(std::move(r));
+        }
+        g.rows.push_back(MakeRow(RowKind::MenuSep));
+        g.rows.push_back(MenuRow(Loc(L"Show On-Screen Keyboard"), kOnScreenKeyboard));
+        g.rows.push_back(MenuRow(Loc(L"Keyboard Settings\u2026"), kKeyboardSettings));
+    }
+    // Width by content: check column (menu-text-x 22) + title + 28 + shortcut +
+    // menu-shortcut-x 14, at least menu-min-w 220 (prototype .mb-mi*).
+    float titleW = 0.0f, keyW = 0.0f;
+    for (const Row& r : g.rows) {
+        if (r.kind != RowKind::MenuItem) continue;
+        ComPtr<IDWriteTextLayout> t = DesignType::Layout(r.title, Text::PanelRow, 1.0f, 1000.0f, Design::kMenuRowH);
+        titleW = std::max(titleW, DesignType::Width(t.Get()));
+        if (!r.value.empty()) {
+            ComPtr<IDWriteTextLayout> k = DesignType::Layout(r.value, Text::PanelRow, 1.0f, 1000.0f, Design::kMenuRowH);
+            keyW = std::max(keyW, DesignType::Width(k.Get()));
+        }
+    }
+    g.width = std::max(Design::kMenuMinW,
+                       std::ceil(Design::kMenuTextX + titleW + Design::kMenuTitleGap + keyW + Design::kMenuShortcutX));
+}
+
 void BuildRows() {
     g.rows.clear();
-    if (g.item == BarContent::kVolume) {
+    g.menu = IsMenu(g.item);
+    g.width = Design::kPanelW;
+    g.radius = g.menu ? Design::kRadiusMenu : Design::kRadiusPanel;
+    g.padY = g.menu ? Design::kMenuPadY : Design::kPanelPadY;
+    g.blinkRow = -1;
+    if (g.menu) {
+        BuildMenu();
+    } else if (g.item == BarContent::kVolume) {
         g.rows.push_back(MakeRow(RowKind::Header, Loc(L"Sound")));
         g.rows.push_back(MakeRow(RowKind::Slider));
         g.rows.push_back(MakeRow(RowKind::Section, Loc(L"Output")));
@@ -6685,13 +6847,13 @@ void BuildRows() {
         g.rows.push_back(MakeRow(RowKind::Sep));
         g.rows.push_back(MakeRow(RowKind::Link, Loc(L"Date & Time Settings…"), kOpenDateSettings));
     }
-    float y = Design::kPanelPadY;
+    float y = g.padY;
     for (Row& r : g.rows) {
         r.h = RowHeight(r.kind);
         r.y = y;
         y += r.h;
     }
-    g.height = y + Design::kPanelPadY;
+    g.height = y + g.padY;
     g.hover = g.press = -1;
     g_iconBitmaps.clear();
 }
@@ -6817,26 +6979,26 @@ void DrawGlyph(wchar_t glyph, float px, D2D1_RECT_F box, D2D1_COLOR_F color, flo
 }
 
 D2D1_RECT_F SwitchRect(const Row& r) {
-    const float right = Design::kPanelW - Design::kPanelContentX;
+    const float right = g.width - Design::kPanelContentX;
     const float top = r.y + (r.h - Design::kSwitchH) * 0.5f;
     return D2D1::RectF(right - Design::kSwitchW, top, right, top + Design::kSwitchH);
 }
 
 D2D1_RECT_F SliderRect(const Row& r) {
     const float top = r.y + Design::kSliderPadTop;
-    return D2D1::RectF(Design::kPanelContentX, top, Design::kPanelW - Design::kPanelContentX, top + Design::kSliderH);
+    return D2D1::RectF(Design::kPanelContentX, top, g.width - Design::kPanelContentX, top + Design::kSliderH);
 }
 
 // Calendar header chevrons: 24 x 24 boxes at the right, 4 apart.
 D2D1_RECT_F ChevronRect(const Row& r, bool next) {
     const float size = Design::kBarHighlightH;
-    const float right = Design::kPanelW - Design::kPanelContentX - (next ? 0.0f : size + 4.0f);
+    const float right = g.width - Design::kPanelContentX - (next ? 0.0f : size + 4.0f);
     const float top = r.y + (r.h - size) * 0.5f;
     return D2D1::RectF(right - size, top, right, top + size);
 }
 
 float CalCellWidth() {
-    return (Design::kPanelW - Design::kPanelContentX * 2.0f) / 7.0f;
+    return (g.width - Design::kPanelContentX * 2.0f) / 7.0f;
 }
 
 void DrawShadow(D2D1_RECT_F body) {
@@ -6851,7 +7013,7 @@ void DrawShadow(D2D1_RECT_F body) {
     for (int i = 0; i < kSteps; ++i) {
         const float grow = Design::kPanelShadowStdDev * (1.0f - 2.0f * (i + 0.5f) / kSteps);
         const D2D1_RECT_F r = D2D1::RectF(base.left - grow, base.top - grow, base.right + grow, base.bottom + grow);
-        const float radius = std::max(0.0f, Design::kRadiusPanel + grow);
+        const float radius = std::max(0.0f, g.radius + grow);
         if (ID2D1SolidColorBrush* b = Brush(D2D1::ColorF(0, 0, 0, layerAlpha))) {
             g_rt->FillRoundedRectangle(D2D1::RoundedRect(r, radius, radius), b);
         }
@@ -6860,14 +7022,14 @@ void DrawShadow(D2D1_RECT_F body) {
     if (ID2D1SolidColorBrush* b = Brush(D2D1::ColorF(0, 0, 0, Design::kPanelEdgeAlpha))) {
         g_rt->DrawRoundedRectangle(
             D2D1::RoundedRect(D2D1::RectF(body.left - e, body.top - e, body.right + e, body.bottom + e),
-                              Design::kRadiusPanel + e, Design::kRadiusPanel + e),
+                              g.radius + e, g.radius + e),
             b, Design::kPanelEdgeSpread);
     }
 }
 
 void DrawRow(int index, const D2D1_MATRIX_3X2_F& base) {
     const Row& r = g.rows[index];
-    const float W = Design::kPanelW;
+    const float W = g.width;
     const float cx = Design::kPanelContentX;
     const bool dimmed = g.rowsOff && (r.kind == RowKind::Item || r.kind == RowKind::Section || r.kind == RowKind::Caption);
     const float a = dimmed ? Design::kRowsOffAlpha : 1.0f;
@@ -7022,6 +7184,40 @@ void DrawRow(int index, const D2D1_MATRIX_3X2_F& base) {
             }
             break;
         }
+        case RowKind::MenuItem: {
+            // components.md "Выпадающее меню": plate inset 5, radius 6, accent on
+            // hover with on-accent text (instant); text at x 22; check in the
+            // column before it; shortcut right-aligned 14 from the edge, ink-2;
+            // disabled items ink-3. A chosen item blinks: plate off 70 ms, on 60 ms.
+            const bool blinkOff = g.blinkRow == index && NowSeconds() - g.blinkStart < Design::kMenuBlinkOffSec;
+            const bool lit = !r.disabled && (g.hover == index || g.blinkRow == index) && !blinkOff;
+            if (lit) {
+                const D2D1_RECT_F plateRect = D2D1::RectF(Design::kMenuRowInset, r.y, W - Design::kMenuRowInset, r.y + r.h);
+                if (ID2D1SolidColorBrush* b = Brush(Design::kAccent)) {
+                    g_rt->FillRoundedRectangle(D2D1::RoundedRect(plateRect, Design::kRadiusMenuRow, Design::kRadiusMenuRow), b);
+                }
+            }
+            const D2D1_COLOR_F ink = r.disabled ? Design::kInk3 : lit ? Design::kOnAccent : Design::kInk1;
+            if (r.check) {
+                DrawGlyph(Design::kGlyphCheckmark, Design::kMenuCheckGlyph,
+                          D2D1::RectF(Design::kMenuRowInset, r.y, Design::kMenuTextX, r.y + r.h), ink, 1.0f);
+            }
+            const float keyRight = W - Design::kMenuShortcutX;
+            DrawLabel(r.title, Text::PanelRow, Design::kMenuTextX, r.y, std::max(10.0f, keyRight - Design::kMenuTextX), r.h, ink, 1.0f);
+            if (!r.value.empty()) {
+                const D2D1_COLOR_F keyInk = r.disabled ? Design::kInk3 : lit ? Design::kOnAccent : Design::kInk2;
+                DrawLabel(r.value, Text::PanelRow, Design::kMenuTextX, r.y, keyRight - Design::kMenuTextX, r.h, keyInk,
+                          lit ? Design::kMenuShortcutLitAlpha : 1.0f, DWRITE_TEXT_ALIGNMENT_TRAILING);
+            }
+            break;
+        }
+        case RowKind::MenuSep: {
+            if (ID2D1SolidColorBrush* b = Brush(Design::kSeparator)) {
+                const float y = r.y + Design::kSepMarginY;
+                g_rt->FillRectangle(D2D1::RectF(Design::kSepInsetXMenu, y, W - Design::kSepInsetXMenu, y + Design::kHairline), b);
+            }
+            break;
+        }
         case RowKind::CalWeekdays: {
             const float lh = Design::kText[static_cast<int>(Text::PanelSection)].lineHeight;
             const int first = FirstDayOfWeek();
@@ -7073,17 +7269,16 @@ void Render(float opacity, float scale, float dy) {
                                    D2D1::Matrix3x2F::Scale(g.scale, g.scale) *
                                    D2D1::Matrix3x2F::Translation(g.marginX, g.marginTop);
     g_rt->SetTransform(base);
-    const D2D1_RECT_F body = D2D1::RectF(0.0f, 0.0f, Design::kPanelW, g.height);
+    const D2D1_RECT_F body = D2D1::RectF(0.0f, 0.0f, g.width, g.height);
     DrawShadow(body);
-    const D2D1_ROUNDED_RECT shape = D2D1::RoundedRect(body, Design::kRadiusPanel, Design::kRadiusPanel);
+    const D2D1_ROUNDED_RECT shape = D2D1::RoundedRect(body, g.radius, g.radius);
     if (ID2D1SolidColorBrush* b = Brush(Design::kPanelBgSolid)) g_rt->FillRoundedRectangle(shape, b);
     for (int i = 0; i < static_cast<int>(g.rows.size()); ++i) DrawRow(i, base);
     // panel-rim: inset 0 0 0 1px
     const float h = Design::kHairline * 0.5f;
     if (ID2D1SolidColorBrush* b = Brush(Design::kPanelRim)) {
         g_rt->DrawRoundedRectangle(
-            D2D1::RoundedRect(D2D1::RectF(h, h, Design::kPanelW - h, g.height - h), Design::kRadiusPanel - h,
-                              Design::kRadiusPanel - h),
+            D2D1::RoundedRect(D2D1::RectF(h, h, g.width - h, g.height - h), g.radius - h, g.radius - h),
             b, Design::kHairline);
     }
     if (g_rt->EndDraw() == static_cast<HRESULT>(D2DERR_RECREATE_TARGET)) {
@@ -7121,7 +7316,7 @@ bool Place() {
     if (!m.valid || g.item < 0 || !m.present[g.item]) return false;
     const float s = std::max(0.05f, TopBar::g_scale);
     const D2D1_RECT_F box = m.boxes[g.item];
-    const float panelW = Design::kPanelW * s;
+    const float panelW = g.width * s;
     const RECT& mon = TopBar::g_monitorRect;
     const float x = std::round(Clamp(static_cast<float>(bar.left) + box.left, mon.left + Design::kPanelMargin * s,
                                      mon.right - panelW - Design::kPanelMargin * s));
@@ -7129,7 +7324,7 @@ bool Place() {
     g.scale = s;
     g.marginX = std::ceil(Design::kPanelShadowStdDev * 2.0f * s + Design::kPanelShadowY * s);
     g.marginTop = std::round(Design::kPanelGap * s);
-    g.originX = Clamp((static_cast<float>(bar.left) + (box.left + box.right) * 0.5f - x) / s, 0.0f, Design::kPanelW);
+    g.originX = Clamp((static_cast<float>(bar.left) + (box.left + box.right) * 0.5f - x) / s, 0.0f, g.width);
     g.wx = static_cast<int>(x - g.marginX);
     g.wy = static_cast<int>(y - g.marginTop);
     g.ww = static_cast<int>(std::ceil(panelW + g.marginX * 2.0f));
@@ -7155,6 +7350,7 @@ void HideWindow() {
 void Close(bool animate) {
     if (!g.open) return;
     g.open = false;
+    g_menuKeys = false;
     SetHooks(false);
     {
         std::lock_guard lock(g_bodyMutex);
@@ -7241,6 +7437,7 @@ void Open(int item, bool animate) {
     RenderCurrent();
     SetWindowPos(g_wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     g.lastTick = NowSeconds();
+    g_menuKeys = g.menu;
     SetHooks(true);
 }
 
@@ -7324,7 +7521,62 @@ void Activate(const Row& r) {
             Close(true);
             OpenSettings(L"ms-settings:batterysaver");
             break;
+        case kAbout:
+            OpenSettings(L"ms-settings:about");
+            break;
+        case kWindowsSettings:
+            OpenSettings(L"ms-settings:");
+            break;
+        case kStore:
+            OpenSettings(L"ms-windows-store:");
+            break;
+        case kTaskManager:
+            OpenSettings(L"taskmgr.exe");
+            break;
+        case kSleep: {
+            using SetSuspendState_t = BOOLEAN(WINAPI*)(BOOLEAN, BOOLEAN, BOOLEAN);
+            if (HMODULE powrprof = LoadLibraryW(L"powrprof.dll")) {
+                if (auto suspend = reinterpret_cast<SetSuspendState_t>(GetProcAddress(powrprof, "SetSuspendState"))) {
+                    suspend(FALSE, FALSE, FALSE);
+                }
+                FreeLibrary(powrprof);
+            }
+            break;
+        }
+        case kPowerDialog:
+            // Restart / shut down / log out ask first, like the "…" says: Windows'
+            // own "Shut Down Windows" dialog (what Alt+F4 on the desktop opens).
+            if (HWND desktop = FindWindowW(L"Progman", nullptr)) PostMessageW(desktop, WM_CLOSE, 0, 0);
+            break;
+        case kLock:
+            LockWorkStation();
+            break;
+        case kSelectLayout:
+            if (HWND fg = GetForegroundWindow()) {
+                PostMessageW(fg, WM_INPUTLANGCHANGEREQUEST, 0, static_cast<LPARAM>(r.data));
+            }
+            break;
+        case kOnScreenKeyboard:
+            OpenSettings(L"osk.exe");
+            break;
+        case kKeyboardSettings:
+            OpenSettings(L"ms-settings:keyboard");
+            break;
+        case kOpenForecast:
+            OpenSettings((L"https://wttr.in/" + PercentEncodeUtf8(r.arg)).c_str());
+            break;
     }
+}
+
+// A menu item was chosen: blink (plate off 70 ms, on 60 ms), then the menu
+// closes (panel.close) and the item's action runs.
+void ChooseMenuItem(int index) {
+    if (index < 0 || index >= static_cast<int>(g.rows.size()) || g.blinkRow >= 0) return;
+    const Row& r = g.rows[index];
+    if (r.kind != RowKind::MenuItem || r.disabled) return;
+    g.blinkRow = index;
+    g.blinkStart = NowSeconds();
+    g.dirty = true;
 }
 
 void ToggleRadio() {
@@ -7416,6 +7668,26 @@ void OnStatusChanged() {
     }
 }
 
+// ↑ / ↓ / Enter while a menu is open (from the keyboard hook).
+void MenuKey(UINT vk) {
+    if (!g.open || !g.menu || g.blinkRow >= 0) return;
+    if (vk == VK_RETURN) {
+        ChooseMenuItem(g.hover);
+        return;
+    }
+    const int n = static_cast<int>(g.rows.size());
+    const int dir = vk == VK_DOWN ? 1 : -1;
+    int i = g.hover;
+    for (int k = 0; k < n; ++k) {
+        i = i < 0 ? (dir > 0 ? 0 : n - 1) : (i + dir + n) % n;
+        if (g.rows[i].kind == RowKind::MenuItem && !g.rows[i].disabled) break;
+    }
+    if (i >= 0 && i < n && g.rows[i].kind == RowKind::MenuItem && !g.rows[i].disabled) {
+        g.hover = i;
+        g.dirty = true;
+    }
+}
+
 void OnIslandExpanded() {
     Close(true);
 }
@@ -7435,6 +7707,17 @@ void Tick() {
     if ((g.open || g.closing) && (!TopBar::g_bar || TopBar::g_fullscreenHidden)) {
         Close(false);
         HideWindow();
+    }
+    if (g.open && g.blinkRow >= 0) {
+        const double t = now - g.blinkStart;
+        if (t >= Design::kMenuBlinkOffSec + Design::kMenuBlinkOnSec) {
+            const Row row = g.rows[g.blinkRow];
+            g.blinkRow = -1;
+            Close(true);
+            Activate(row);
+        } else if (t >= Design::kMenuBlinkOffSec && t - dt < Design::kMenuBlinkOffSec) {
+            g.dirty = true;  // the plate comes back
+        }
     }
     if (g.open) {
         if (g.item == BarContent::kVolume) {
@@ -7483,6 +7766,7 @@ int RowAt(float uy) {
 bool Interactive(const Row& r) {
     if (g.rowsOff && (r.kind == RowKind::Item || r.kind == RowKind::Section || r.kind == RowKind::Caption)) return false;
     if (r.plain) return false;
+    if (r.kind == RowKind::MenuItem) return !r.disabled;
     return r.kind == RowKind::Item || r.kind == RowKind::Link || r.kind == RowKind::Slider ||
            r.kind == RowKind::CalHeader || (r.kind == RowKind::Header && r.toggle);
 }
@@ -7509,7 +7793,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_MOUSEACTIVATE:
             return MA_NOACTIVATE;
         case WM_MOUSEMOVE: {
-            if (!g.open) return 0;
+            if (!g.open || g.blinkRow >= 0) return 0;
             if (!g.mouseTracked) {
                 TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
                 g.mouseTracked = TrackMouseEvent(&tme) != FALSE;
@@ -7551,8 +7835,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             return 0;
         case WM_LBUTTONDOWN: {
-            if (!g.open) return 0;
-            if (ux < 0.0f || ux > Design::kPanelW || uy < 0.0f || uy > g.height) {  // the shadow margin
+            if (!g.open || g.blinkRow >= 0) return 0;
+            if (ux < 0.0f || ux > g.width || uy < 0.0f || uy > g.height) {  // the shadow margin
                 Close(true);
                 return 0;
             }
@@ -7597,6 +7881,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             g.press = -1;
             g.dirty = true;
             if (pressed >= 0 && pressed == RowAt(uy) && pressed < static_cast<int>(g.rows.size()) &&
+                g.rows[pressed].kind == RowKind::MenuItem) {
+                ChooseMenuItem(pressed);
+            } else if (pressed >= 0 && pressed == RowAt(uy) && pressed < static_cast<int>(g.rows.size()) &&
                 (g.rows[pressed].kind == RowKind::Item || g.rows[pressed].kind == RowKind::Link)) {
                 const Row row = g.rows[pressed];  // Activate may rebuild the rows
                 Activate(row);
