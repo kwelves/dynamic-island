@@ -116,6 +116,23 @@ We love community contributions! To ensure high-quality updates, please follow t
 
 // ==WindhawkModSettings==
 /*
+- TopBar:
+  - Enabled: true
+    $name: Top bar
+    $description: Shows a full-width bar along the top edge of the island's monitor and reserves that space, so maximised windows stop below it. The island sits in the middle of the bar. While the bar is on, the island always uses a top position, and "Follow Mouse" falls back to the primary monitor.
+  - Material: acrylic
+    $name: Bar material
+    $description: Acrylic needs Windows "Transparency effects" turned on; without them, or on Windows older than 10 1803, the bar uses the solid theme colour.
+    $options:
+      - acrylic: Acrylic (translucent, like the macOS menu bar)
+      - solid: Solid theme colour
+  - Height: 0
+    $name: Bar height
+    $description: Height in pixels at 100% size scale; it grows with Size scale and DPI just like the island. 0 = automatic (fits the resting island).
+  - TintOpacity: 50
+    $name: Acrylic tint (%)
+    $description: How strongly the theme colour tints the acrylic bar, from 0 (clear) to 100 (almost opaque).
+  $name: Top bar
 - Appearance:
   - Position: top-center
     $name: Position
@@ -706,6 +723,7 @@ constexpr UINT WM_APP_MOUSE_WAKE = WM_APP + 0x446;
 // thread, so hotkey and backdrop changes are posted across and applied there.
 constexpr UINT WM_APP_APPLY_HOTKEY = WM_APP + 0x447;
 constexpr UINT WM_APP_APPLY_BACKDROP = WM_APP + 0x448;
+constexpr UINT WM_APP_APPLY_TOPBAR = WM_APP + 0x449;
 constexpr int ID_HIDE_SHOW_HOTKEY = 1;
 constexpr int ID_LOOKUP_HOTKEY = 2;
 constexpr int ID_SONGID_HOTKEY = 3;
@@ -1205,6 +1223,12 @@ enum class ContourBorderMode {
 };
 
 struct Settings {
+    // ── Top bar (AppBar) ─────────────────────────────────────────────────────
+    bool topBarEnabled = true;
+    bool topBarSolid = false;       // false = acrylic
+    int topBarHeight = 0;           // content px before sizeScale; 0 = automatic
+    float topBarTint = 0.5f;        // acrylic tint opacity, 0..1
+
     Position position = Position::TopCenter;
     int targetMonitor = 0;
     int offsetX = 0;
@@ -3042,6 +3066,15 @@ void LoadSettings() {
         next.position = Position::BottomRight;
     }
 
+    next.topBarEnabled = Wh_GetIntSetting(L"TopBar.Enabled") != 0;
+    next.topBarSolid = EqualsNoCase(GetStringSettingCopy(L"TopBar.Material"), L"solid");
+    next.topBarHeight = ClampInt(Wh_GetIntSetting(L"TopBar.Height"), 0, 200);
+    next.topBarTint = Clamp(Wh_GetIntSetting(L"TopBar.TintOpacity") / 100.0f, 0.0f, 1.0f);
+    // The bar lives on the top edge, so the island cannot sit at the bottom.
+    if (next.topBarEnabled && IsBottomPosition(next.position)) {
+        next.position = Position::TopCenter;
+    }
+
     const std::wstring scale = GetStringSettingCopy(L"Appearance.SizeScale");
     if (!scale.empty()) {
         wchar_t* end;
@@ -3056,6 +3089,11 @@ void LoadSettings() {
     if (mon == L"primary") next.targetMonitor = 0;
     else if (mon == L"follow") next.targetMonitor = -1;
     else next.targetMonitor = _wtoi(mon.c_str());
+    // A reserved bar cannot hop between monitors with the cursor: every move would
+    // re-flow the maximised windows on two screens. Pin it to the primary instead.
+    if (next.topBarEnabled && next.targetMonitor == -1) {
+        next.targetMonitor = 0;
+    }
 
     // Auto DPI scaling: multiply sizeScale by monitor DPI factor for the target display.
     // On mixed-DPI setups or a 4K 200% display this scales the island to the right physical size.
@@ -3714,6 +3752,11 @@ void LoadSettings() {
     if (backdropChanged && g_hwnd) {
         PostMessageW(g_hwnd, WM_APP_APPLY_BACKDROP, 0, 0);
     }
+    // The top bar window belongs to the render thread too. TopBar::Apply is
+    // idempotent, so it is simply re-run after every settings load.
+    if (g_hwnd) {
+        PostMessageW(g_hwnd, WM_APP_APPLY_TOPBAR, 0, 0);
+    }
 }
 
 void EnableBlurBehind(HWND hwnd) {
@@ -4159,6 +4202,423 @@ void ApplyBackdropMaterial(HWND) {
     g_layoutDirty = true;
 }
 
+// ── Top bar (AppBar) ─────────────────────────────────────────────────────────
+// A full-width strip along the top edge of one monitor, registered with the shell
+// as an application desktop toolbar (SHAppBarMessage, ABE_TOP). Windows takes it
+// out of the work area, so maximised windows stop below it.
+//
+// The island itself is not part of the bar. It stays its own layered, topmost
+// stage window and only anchors to the bar's rect instead of the work area
+// (ComputeStageLayout / GetIslandDockRect). The bar sits directly below the island
+// and its DWM backdrop windows in the z-order, so the expanded island still spills
+// over the windows underneath, exactly as before.
+//
+// The bar never repaints per frame: only on resize, material or theme changes.
+// Its client area is a Direct2D surface split into left / centre / right zones
+// (ComputeLayout) so content can be drawn on either side of the island later.
+//
+// Threading: everything runs on the render thread, which owns both windows,
+// except GetAnchorRect (also read by the mouse-hook thread) and EmergencyRemove
+// (mod unload when the render thread did not exit in time).
+namespace TopBar {
+
+constexpr wchar_t kClassName[] = L"Windhawk.DynamicIslandTopBar";
+constexpr UINT kCallbackMessage = WM_APP + 0x44A;
+
+// Automatic height, content px (multiplied by sizeScale, which includes DPI):
+// the resting island plus a 2px margin above and below.
+constexpr float kAutoHeight = 40.0f;
+// Height of the resting island, which is centred vertically in the bar. Taller
+// collapsed pills (alerts) keep the same top edge and grow down past the bar.
+constexpr float kPillRestHeight = 36.0f;
+// Width kept clear around the island for future side content, content px.
+constexpr float kCenterReserve = 420.0f;
+
+// Client-area zones, px. Nothing is drawn in them yet.
+struct Layout {
+    D2D1_RECT_F left = {};
+    D2D1_RECT_F center = {};
+    D2D1_RECT_F right = {};
+};
+
+HWND g_bar = nullptr;
+HWND g_island = nullptr;
+bool g_classRegistered = false;
+bool g_registered = false;        // ABM_NEW succeeded and no ABM_REMOVE since
+bool g_fullscreenHidden = false;  // hidden while a fullscreen app owns our monitor
+HMONITOR g_monitor = nullptr;
+RECT g_monitorRect = {};
+int g_heightPx = 0;
+float g_scale = 1.0f;
+int g_offsetX = 0;
+bool g_solid = false;
+D2D1_COLOR_F g_fill = D2D1::ColorF(0.031f, 0.031f, 0.039f, 1.0f);
+int g_accentState = -1;
+DWORD g_accentColor = 0;
+
+ComPtr<ID2D1Factory> g_factory;
+ComPtr<ID2D1HwndRenderTarget> g_target;
+
+// The bar's screen rect as the shell granted it. Strict leaf lock.
+std::mutex g_anchorMutex;
+RECT g_anchorRect = {};
+bool g_anchorValid = false;
+
+// The registered window, for EmergencyRemove from another thread.
+std::atomic<HWND> g_registeredHwnd{nullptr};
+
+void PublishAnchor(const RECT* rc) {
+    {
+        std::lock_guard lock(g_anchorMutex);
+        g_anchorValid = rc != nullptr;
+        g_anchorRect = rc ? *rc : RECT{};
+    }
+    g_layoutDirty = true;
+}
+
+// The rect the island anchors to. False while the bar is off or not registered,
+// in which case callers fall back to the monitor's work area.
+bool GetAnchorRect(RECT* out) {
+    std::lock_guard lock(g_anchorMutex);
+    if (!g_anchorValid) return false;
+    *out = g_anchorRect;
+    return true;
+}
+
+Layout ComputeLayout() {
+    Layout layout;
+    if (!g_bar) return layout;
+    RECT rc = {};
+    GetClientRect(g_bar, &rc);
+    const float w = static_cast<float>(rc.right - rc.left);
+    const float h = static_cast<float>(rc.bottom - rc.top);
+    const float reserve = std::min(w, kCenterReserve * g_scale);
+    // Centred on where a top-centre island sits; other positions will need their
+    // own split once side content exists.
+    const float mid = w * 0.5f + static_cast<float>(g_offsetX);
+    const float cl = Clamp(mid - reserve * 0.5f, 0.0f, w);
+    const float cr = Clamp(mid + reserve * 0.5f, 0.0f, w);
+    layout.left = D2D1::RectF(0.0f, 0.0f, cl, h);
+    layout.center = D2D1::RectF(cl, 0.0f, cr, h);
+    layout.right = D2D1::RectF(cr, 0.0f, w, h);
+    return layout;
+}
+
+bool EnsureTarget() {
+    if (g_target) return true;
+    if (!g_bar) return false;
+    if (!g_factory &&
+        FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory),
+                                 reinterpret_cast<void**>(g_factory.GetAddressOf())))) {
+        return false;
+    }
+    RECT rc = {};
+    GetClientRect(g_bar, &rc);
+    // Premultiplied alpha: transparent pixels let the acrylic accent show through.
+    // 96 DPI so one DIP is one physical pixel, like the island's own renderer.
+    const D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+        D2D1_RENDER_TARGET_TYPE_DEFAULT,
+        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
+        96.0f, 96.0f);
+    const D2D1_HWND_RENDER_TARGET_PROPERTIES hwndProps = D2D1::HwndRenderTargetProperties(
+        g_bar, D2D1::SizeU(static_cast<UINT32>(std::max(1L, rc.right - rc.left)),
+                           static_cast<UINT32>(std::max(1L, rc.bottom - rc.top))));
+    return SUCCEEDED(g_factory->CreateHwndRenderTarget(props, hwndProps, g_target.GetAddressOf()));
+}
+
+void Paint() {
+    PAINTSTRUCT ps;
+    BeginPaint(g_bar, &ps);
+    if (EnsureTarget()) {
+        g_target->BeginDraw();
+        g_target->SetTransform(D2D1::Matrix3x2F::Identity());
+        g_target->Clear(g_solid ? g_fill : D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
+
+        // Side content (active app, tray icons, clock) will be drawn here into
+        // layout.left / layout.right. The island covers layout.center.
+        const Layout layout = ComputeLayout();
+        (void)layout;
+
+        if (g_target->EndDraw() == static_cast<HRESULT>(D2DERR_RECREATE_TARGET)) {
+            g_target.Reset();
+            InvalidateRect(g_bar, nullptr, FALSE);
+        }
+    }
+    EndPaint(g_bar, &ps);
+}
+
+void ApplyMaterial(const Settings& s) {
+    namespace Dwm = DwmBackdrop;
+    if (!g_bar || !Dwm::Available()) return;
+    int state = Dwm::kAccentDisabled;
+    DWORD color = 0;
+    if (!g_solid) {
+        D2D1_COLOR_F tint = s.pillBgColor;
+        tint.a = 1.0f;
+        state = Dwm::kAccentEnableAcrylicBlurBehind;
+        color = Dwm::ColorToAccentAbgr(tint, s.topBarTint);
+    }
+    if (state == g_accentState && color == g_accentColor) return;
+    Dwm::AccentPolicy policy = {};
+    policy.accentState = state;
+    policy.gradientColor = color;
+    Dwm::CompositionAttribData data = {Dwm::kWcaAccentPolicy, &policy, sizeof(policy)};
+    Dwm::g_setWca(g_bar, &data);
+    g_accentState = state;
+    g_accentColor = color;
+}
+
+// Keeps the bar directly below the island and its backdrop windows, so it never
+// covers the island and inherits the island's topmost band.
+void Restack() {
+    if (!g_bar || g_fullscreenHidden || !g_island || !IsWindow(g_island)) return;
+    HWND last = g_island;
+    for (const DwmBackdrop::Slot& slot : DwmBackdrop::g_slots) {
+        if (slot.hwnd && slot.visible) last = slot.hwnd;
+    }
+    if (IsWindowVisible(g_bar) && GetWindow(last, GW_HWNDNEXT) == g_bar) return;
+    SetWindowPos(g_bar, last, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_SHOWWINDOW);
+}
+
+// ABM_QUERYPOS / ABM_SETPOS for the current monitor and height, then moves the
+// window into the granted rect. With force=false (ABN_POSCHANGED) nothing is sent
+// when the shell would grant the same rect again, which keeps two app bars from
+// ping-ponging position changes.
+void UpdatePosition(bool force) {
+    if (!g_bar || !g_registered) return;
+    APPBARDATA abd = {sizeof(abd)};
+    abd.hWnd = g_bar;
+    abd.uEdge = ABE_TOP;
+    abd.rc = {g_monitorRect.left, g_monitorRect.top, g_monitorRect.right,
+              g_monitorRect.top + g_heightPx};
+    SHAppBarMessage(ABM_QUERYPOS, &abd);
+    abd.rc.bottom = abd.rc.top + g_heightPx;
+
+    RECT current = {};
+    if (!force && GetAnchorRect(&current) && EqualRect(&current, &abd.rc)) return;
+
+    SHAppBarMessage(ABM_SETPOS, &abd);
+    SetWindowPos(g_bar, nullptr, abd.rc.left, abd.rc.top, abd.rc.right - abd.rc.left,
+                 abd.rc.bottom - abd.rc.top, SWP_NOZORDER | SWP_NOACTIVATE);
+    PublishAnchor(&abd.rc);
+    Wh_Log(L"Top bar placed at (%ld,%ld)-(%ld,%ld).", abd.rc.left, abd.rc.top, abd.rc.right,
+           abd.rc.bottom);
+}
+
+void SetFullscreen(bool on) {
+    // ABN_FULLSCREENAPP is not per monitor; only react to our own monitor.
+    if (on) {
+        HWND fg = GetForegroundWindow();
+        if (!fg || MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST) != g_monitor) on = false;
+    }
+    if (on == g_fullscreenHidden) return;
+    g_fullscreenHidden = on;
+    if (on) {
+        ShowWindow(g_bar, SW_HIDE);
+    } else {
+        Restack();  // shows it again, right below the island
+    }
+}
+
+LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT:
+            Paint();
+            return 0;
+        case WM_SIZE:
+            if (g_target) {
+                g_target->Resize(D2D1::SizeU(LOWORD(lParam), HIWORD(lParam)));
+            }
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_ACTIVATE:
+            if (g_registered) {
+                APPBARDATA abd = {sizeof(abd)};
+                abd.hWnd = hwnd;
+                SHAppBarMessage(ABM_ACTIVATE, &abd);
+            }
+            break;
+        case WM_WINDOWPOSCHANGED:
+            if (g_registered) {
+                APPBARDATA abd = {sizeof(abd)};
+                abd.hWnd = hwnd;
+                SHAppBarMessage(ABM_WINDOWPOSCHANGED, &abd);
+            }
+            break;
+        case WM_DPICHANGED:
+        case WM_DISPLAYCHANGE:
+            // Monitor rect or scale may have changed; Apply re-reads both. The
+            // suggested DPI rect is ignored: the shell decides where an app bar goes.
+            if (g_island) PostMessageW(g_island, WM_APP_APPLY_TOPBAR, 0, 0);
+            return 0;
+        case kCallbackMessage:
+            switch (wParam) {
+                case ABN_POSCHANGED:
+                    UpdatePosition(false);
+                    break;
+                case ABN_FULLSCREENAPP:
+                    SetFullscreen(lParam != 0);
+                    break;
+            }
+            return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+bool Create() {
+    HINSTANCE inst = GetModuleHandleW(nullptr);
+    if (!g_classRegistered) {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = WndProc;
+        wc.hInstance = inst;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.lpszClassName = kClassName;
+        if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+            Wh_Log(L"Top bar: RegisterClassExW failed (%lu).", GetLastError());
+            return false;
+        }
+        g_classRegistered = true;
+    }
+    // Created hidden; Restack shows it once it is placed below the island.
+    g_bar = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST, kClassName,
+                            L"Dynamic Island Top Bar", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr,
+                            inst, nullptr);
+    if (!g_bar) {
+        Wh_Log(L"Top bar: CreateWindowExW failed (%lu).", GetLastError());
+        return false;
+    }
+    if (DwmBackdrop::Available()) {
+        DwmBackdrop::DisableTransitions(g_bar);
+    }
+    // Square corners on Windows 11 (DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_DONOTROUND).
+    // Fails harmlessly on Windows 10.
+    const DWORD cornerPreference = 1;
+    DwmSetWindowAttribute(g_bar, 33, &cornerPreference, sizeof(cornerPreference));
+    return true;
+}
+
+bool Register() {
+    APPBARDATA abd = {sizeof(abd)};
+    abd.hWnd = g_bar;
+    abd.uCallbackMessage = kCallbackMessage;
+    if (!SHAppBarMessage(ABM_NEW, &abd)) {
+        Wh_Log(L"Top bar: ABM_NEW failed.");
+        return false;
+    }
+    g_registered = true;
+    g_registeredHwnd = g_bar;
+    return true;
+}
+
+void Unregister() {
+    if (!g_registered) return;
+    g_registered = false;
+    if (HWND h = g_registeredHwnd.exchange(nullptr)) {
+        APPBARDATA abd = {sizeof(abd)};
+        abd.hWnd = h;
+        SHAppBarMessage(ABM_REMOVE, &abd);
+        Wh_Log(L"Top bar: space released.");
+    }
+    PublishAnchor(nullptr);
+}
+
+// Releases the reserved space and destroys the bar. Safe to call repeatedly.
+void Destroy() {
+    Unregister();
+    g_target.Reset();
+    g_factory.Reset();
+    if (g_bar) {
+        DestroyWindow(g_bar);
+        g_bar = nullptr;
+    }
+    if (g_classRegistered) {
+        UnregisterClassW(kClassName, GetModuleHandleW(nullptr));
+        g_classRegistered = false;
+    }
+    g_fullscreenHidden = false;
+    g_monitor = nullptr;
+    g_monitorRect = {};
+    g_heightPx = 0;
+    g_accentState = -1;
+    g_accentColor = 0;
+}
+
+// Brings the bar in line with the current settings: creates, registers, moves,
+// re-materials or destroys it. Idempotent, so it can be called after any change.
+void Apply(HWND island) {
+    g_island = island;
+    const Settings s = GetSettingsCopy();
+    if (!s.topBarEnabled) {
+        Destroy();
+        return;
+    }
+    if (!g_bar && !Create()) return;
+    if (!g_registered && !Register()) {
+        Destroy();
+        return;
+    }
+
+    HMONITOR monitor = GetAnchorMonitorFor(s.targetMonitor);
+    MONITORINFO mi = {sizeof(mi)};
+    if (!GetMonitorInfoW(monitor, &mi)) return;
+    const float contentHeight = s.topBarHeight > 0 ? static_cast<float>(s.topBarHeight) : kAutoHeight;
+    const int heightPx = std::max(1, static_cast<int>(std::lround(contentHeight * s.sizeScale)));
+
+    RECT anchor = {};
+    const bool geometryChanged = monitor != g_monitor || !EqualRect(&mi.rcMonitor, &g_monitorRect) ||
+                                 heightPx != g_heightPx || !GetAnchorRect(&anchor);
+    g_monitor = monitor;
+    g_monitorRect = mi.rcMonitor;
+    g_heightPx = heightPx;
+    g_scale = s.sizeScale;
+    g_offsetX = s.offsetX;
+    if (geometryChanged) {
+        UpdatePosition(true);
+    }
+
+    D2D1_COLOR_F fill = s.pillBgColor;
+    fill.a = 1.0f;
+    g_fill = fill;
+    g_solid = s.topBarSolid || !DwmBackdrop::Available();
+    ApplyMaterial(s);
+    InvalidateRect(g_bar, nullptr, FALSE);
+    Restack();
+}
+
+// Explorer restarted and forgot every app bar: register again from scratch.
+void OnTaskbarCreated(HWND island) {
+    if (!g_bar) return;
+    g_registered = false;
+    g_registeredHwnd = nullptr;
+    g_monitor = nullptr;  // forces ABM_SETPOS in Apply
+    Apply(island);
+}
+
+// Screen y of the resting pill's top edge inside the bar.
+int RestingPillTop(const Settings& s, const RECT& bar) {
+    if (s.notchStyle || s.borderMergedMode) return bar.top;
+    const float gap = (static_cast<float>(bar.bottom - bar.top) - kPillRestHeight * s.sizeScale) * 0.5f;
+    return bar.top + std::max(0, static_cast<int>(std::lround(gap)));
+}
+
+// Mod unload fallback when the render thread could not tear the bar down itself:
+// give the space back so it is not left reserved with nothing in it.
+void EmergencyRemove() {
+    if (HWND h = g_registeredHwnd.exchange(nullptr)) {
+        APPBARDATA abd = {sizeof(abd)};
+        abd.hWnd = h;
+        SHAppBarMessage(ABM_REMOVE, &abd);
+    }
+}
+
+}  // namespace TopBar
+
 // Always unregisters before registering so a settings change never leaks the
 // previous hotkey. Safe to call before the overlay window exists (no-ops).
 void ApplyHideShowHotkey() {
@@ -4324,7 +4784,11 @@ StageLayout ComputeStageLayout(const Settings& settings, float pillW, float pill
         return s;
     }
 
-    const RECT work = GetAnchorWorkRect();
+    // With the top bar on, the work area starts *below* the bar, so the island
+    // anchors to the bar's own rect instead (it spans the full monitor width).
+    RECT barRect = {};
+    const bool inBar = settings.topBarEnabled && TopBar::GetAnchorRect(&barRect);
+    const RECT work = inBar ? barRect : GetAnchorWorkRect();
     const int workW = work.right - work.left;
     s.width = static_cast<int>(std::ceil(kStageContentWidth * settings.sizeScale + kRenderPadX * 2.0f));
     s.height = static_cast<int>(std::ceil(kStageContentHeight * settings.sizeScale + kRenderPadY * 2.0f));
@@ -4351,7 +4815,14 @@ StageLayout ComputeStageLayout(const Settings& settings, float pillW, float pill
 
     // Vertical. Bottom positions keep the pill's bottom edge fixed, so it grows upward.
     const int offsetY = ResolveOffsetY(pillH + kRenderPadY * 2.0f);
-    if (IsBottomPosition(settings.position)) {
+    if (inBar) {
+        // The resting pill is centred in the bar (or flush with its top edge for
+        // the notch / border-merged shapes); taller pills keep that top edge and
+        // grow downward over the windows below.
+        s.pillTop = flushTop ? 0.0f : kRenderPadY;
+        s.origin.y = TopBar::RestingPillTop(settings, barRect) -
+                     static_cast<int>(s.pillTop) + offsetY;
+    } else if (IsBottomPosition(settings.position)) {
         s.origin.y = work.bottom - s.height - 40 + offsetY;
         s.pillTop = static_cast<float>(s.height) - kRenderPadY - pillH;
     } else {
@@ -4374,6 +4845,7 @@ void ApplyOverlayZOrder(HWND hwnd, int width, int height) {
                      (yieldToClipUi ? SWP_NOZORDER : SWP_SHOWWINDOW));
     if (!yieldToClipUi) {
         DwmBackdrop::EnsureBehind(hwnd);
+        TopBar::Restack();
     }
 }
 
@@ -4476,27 +4948,33 @@ void EnsureTopmost(HWND hwnd, const RECT* pillScreenRect = nullptr) {
         SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
         DwmBackdrop::EnsureBehind(hwnd);
+        TopBar::Restack();
     }
 }
 
 RECT GetIslandDockRect() {
-    RECT work = GetAnchorWorkRect();
+    // Top bar on: anchor to the bar (the work area starts below it). Top positions
+    // then start the hover target at the bar's top edge, i.e. the screen edge.
+    RECT barRect = {};
+    const bool inBar = g_settings.topBarEnabled && TopBar::GetAnchorRect(&barRect);
+    RECT work = inBar ? barRect : GetAnchorWorkRect();
     const float scale = g_settings.sizeScale;
     const int dockWidth = static_cast<int>(std::max(280.0f, 340.0f * scale));
     const int dockHeight = static_cast<int>(std::max(48.0f, 56.0f * scale));
     const bool flushTop = g_settings.notchStyle || g_settings.borderMergedMode;
 
+    const int topY = (flushTop || inBar) ? work.top : (work.top + 8);
     int x = work.left + (work.right - work.left - dockWidth) / 2;
-    int y = flushTop ? work.top : (work.top + 8);
+    int y = topY;
 
     switch (g_settings.position) {
         case Position::TopLeft:
             x = work.left + 16;
-            y = flushTop ? work.top : (work.top + 8);
+            y = topY;
             break;
         case Position::TopRight:
             x = work.right - dockWidth - 16;
-            y = flushTop ? work.top : (work.top + 8);
+            y = topY;
             break;
         case Position::BottomCenter:
             x = work.left + (work.right - work.left - dockWidth) / 2;
@@ -23632,6 +24110,10 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
             ApplyBackdropMaterial(hwnd);
             return 0;
 
+        case WM_APP_APPLY_TOPBAR:
+            TopBar::Apply(hwnd);
+            return 0;
+
         case WM_APP_MOUSE_WAKE:
             // No-op payload — its only job is to wake MsgWaitForMultipleObjects
             // and get drained by the PeekMessage pump.
@@ -24458,6 +24940,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
         Wh_Log(L"TaskbarCreated received; re-registering shell hook window.");
         DeregisterShellHookWindow(hwnd);
         RegisterShellHookWindow(hwnd);
+        TopBar::OnTaskbarCreated(hwnd);
         return 0;
     }
 
@@ -24509,6 +24992,8 @@ DWORD WINAPI RenderThreadProc(void*) {
     EnableBlurBehind(hwnd);
     ApplyBackdropMaterial(hwnd);
     ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+    // Before the first frame, so the island is laid out against the bar at once.
+    TopBar::Apply(hwnd);
 
     ApplyHideShowHotkey();
 
@@ -24953,6 +25438,7 @@ DWORD WINAPI RenderThreadProc(void*) {
         if (!isFullscreen && !g_manuallyHidden.load() && !g_autoHiddenParked.load() &&
             now - lastTopmostCheck > 1.0) {
             EnsureTopmost(hwnd, &pillRect);
+            TopBar::Restack();
             lastTopmostCheck = now;
         }
 
@@ -25193,13 +25679,18 @@ DWORD WINAPI RenderThreadProc(void*) {
             if (currentAnchor != s_lastAnchorMon || currentDpi != s_lastDpi) {
                 s_lastAnchorMon = currentAnchor;
                 s_lastDpi = currentDpi;
-                std::lock_guard lock(g_settingsMutex);
-                if (g_settings.autoDpiScale) {
-                    g_settings.sizeScale = g_settings.baseSizeScale * currentDpi;
-                } else {
-                    g_settings.sizeScale = g_settings.baseSizeScale;
+                {
+                    std::lock_guard lock(g_settingsMutex);
+                    if (g_settings.autoDpiScale) {
+                        g_settings.sizeScale = g_settings.baseSizeScale * currentDpi;
+                    } else {
+                        g_settings.sizeScale = g_settings.baseSizeScale;
+                    }
                 }
                 g_layoutDirty = true;
+                // Outside the lock: Apply takes its own settings copy. The bar's
+                // height follows sizeScale, and its monitor may have changed.
+                TopBar::Apply(hwnd);
             }
         }
 
@@ -25558,6 +26049,7 @@ DWORD WINAPI RenderThreadProc(void*) {
     setHighResTimer(false);
 
     UnbindVolumeEndpoint();
+    TopBar::Destroy();  // gives the reserved space back
     DwmBackdrop::DestroyAll();
     renderer.Shutdown();
     DestroyWindow(hwnd);
@@ -25676,6 +26168,8 @@ void WhTool_ModUninit() {
         PostMessageW(g_hwnd, WM_CLOSE, 0, 0);
     }
     StopThreads();
+    // No-op when the render thread already released the bar's space.
+    TopBar::EmergencyRemove();
     Wh_Log(L"Dynamic Island for Windows unloaded.");
 }
 
