@@ -1,0 +1,2024 @@
+{
+ "meta": {
+  "name": "MacBar",
+  "version": 1,
+  "generated": "2026-11-06",
+  "units": "Все длины — px при масштабе 100 % (DIP). Умножайте на dpi/96. Волосяные линии — 1 физический пиксель.",
+  "colorFormat": "rgba — float 0..1 (D2D1_COLOR_F), hex — #RRGGBBAA",
+  "source": "spec.py — единый источник; tokens.json (страница дизайн-системы) и этот файл генерируются из него",
+  "provenance": {
+   "API": "AppKit/документация",
+   "HIG": "Apple HIG/системные цвета",
+   "замер": "скриншоты macOS Sequoia/Tahoe 1x, ±1 px",
+   "решение": "наше решение в духе macOS"
+  }
+ },
+ "color": {
+  "dark": {
+   "bar-bg": {
+    "hex": "#000000FF",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   },
+   "bar-ink": {
+    "hex": "#FFFFFFFF",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "bar-ink-2": {
+    "hex": "#FFFFFF99",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.6
+    ]
+   },
+   "bar-highlight": {
+    "hex": "#FFFFFF38",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.22
+    ]
+   },
+   "island-bg": {
+    "hex": "#000000FF",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   },
+   "island-ink-2": {
+    "hex": "#FFFFFF99",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.6
+    ]
+   },
+   "island-track": {
+    "hex": "#FFFFFF33",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.2
+    ]
+   },
+   "bar-glass-tint": {
+    "hex": "#1414165C",
+    "rgba": [
+     0.0784,
+     0.0784,
+     0.0863,
+     0.36
+    ]
+   },
+   "bar-glass-ink": {
+    "hex": "#FFFFFFFF",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "bar-glass-rim": {
+    "hex": "#FFFFFF47",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.28
+    ]
+   },
+   "bar-glass-highlight": {
+    "hex": "#FFFFFF38",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.22
+    ]
+   },
+   "panel-bg": {
+    "hex": "#262628CC",
+    "rgba": [
+     0.149,
+     0.149,
+     0.1569,
+     0.8
+    ]
+   },
+   "panel-bg-solid": {
+    "hex": "#262628FF",
+    "rgba": [
+     0.149,
+     0.149,
+     0.1569,
+     1.0
+    ]
+   },
+   "panel-rim": {
+    "hex": "#FFFFFF21",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.13
+    ]
+   },
+   "panel-edge": {
+    "hex": "#0000008C",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.55
+    ]
+   },
+   "ink-1": {
+    "hex": "#FFFFFFDB",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.86
+    ]
+   },
+   "ink-2": {
+    "hex": "#FFFFFF8F",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.56
+    ]
+   },
+   "ink-3": {
+    "hex": "#FFFFFF47",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.28
+    ]
+   },
+   "separator": {
+    "hex": "#FFFFFF1C",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.11
+    ]
+   },
+   "row-hover": {
+    "hex": "#FFFFFF1A",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.1
+    ]
+   },
+   "row-press": {
+    "hex": "#FFFFFF2B",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.17
+    ]
+   },
+   "fill-off": {
+    "hex": "#FFFFFF21",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.13
+    ]
+   },
+   "switch-off": {
+    "hex": "#FFFFFF30",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.19
+    ]
+   },
+   "knob": {
+    "hex": "#FFFFFFFF",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "slider-track": {
+    "hex": "#FFFFFF24",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.14
+    ]
+   },
+   "slider-glyph": {
+    "hex": "#0000008C",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.55
+    ]
+   },
+   "accent": {
+    "hex": "#0A84FFFF",
+    "rgba": [
+     0.0392,
+     0.5176,
+     1.0,
+     1.0
+    ]
+   },
+   "on-accent": {
+    "hex": "#FFFFFFFF",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "accent-text": {
+    "hex": "#409CFFFF",
+    "rgba": [
+     0.251,
+     0.6118,
+     1.0,
+     1.0
+    ]
+   },
+   "green": {
+    "hex": "#30D158FF",
+    "rgba": [
+     0.1882,
+     0.8196,
+     0.3451,
+     1.0
+    ]
+   },
+   "red": {
+    "hex": "#FF453AFF",
+    "rgba": [
+     1.0,
+     0.2706,
+     0.2275,
+     1.0
+    ]
+   },
+   "orange": {
+    "hex": "#FF9F0AFF",
+    "rgba": [
+     1.0,
+     0.6235,
+     0.0392,
+     1.0
+    ]
+   },
+   "focus-ring": {
+    "hex": "#0A84FFFF",
+    "rgba": [
+     0.0392,
+     0.5176,
+     1.0,
+     1.0
+    ]
+   }
+  },
+  "light": {
+   "bar-bg": {
+    "hex": "#000000FF",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   },
+   "bar-ink": {
+    "hex": "#FFFFFFFF",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "bar-ink-2": {
+    "hex": "#FFFFFF99",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.6
+    ]
+   },
+   "bar-highlight": {
+    "hex": "#FFFFFF38",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.22
+    ]
+   },
+   "island-bg": {
+    "hex": "#000000FF",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     1.0
+    ]
+   },
+   "island-ink-2": {
+    "hex": "#FFFFFF99",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.6
+    ]
+   },
+   "island-track": {
+    "hex": "#FFFFFF33",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.2
+    ]
+   },
+   "bar-glass-tint": {
+    "hex": "#FAFAFC6B",
+    "rgba": [
+     0.9804,
+     0.9804,
+     0.9882,
+     0.42
+    ]
+   },
+   "bar-glass-ink": {
+    "hex": "#000000D9",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.85
+    ]
+   },
+   "bar-glass-rim": {
+    "hex": "#FFFFFFB2",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.7
+    ]
+   },
+   "bar-glass-highlight": {
+    "hex": "#0000001A",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.1
+    ]
+   },
+   "panel-bg": {
+    "hex": "#F4F4F6CC",
+    "rgba": [
+     0.9569,
+     0.9569,
+     0.9647,
+     0.8
+    ]
+   },
+   "panel-bg-solid": {
+    "hex": "#ECECEEFF",
+    "rgba": [
+     0.9255,
+     0.9255,
+     0.9333,
+     1.0
+    ]
+   },
+   "panel-rim": {
+    "hex": "#FFFFFFA6",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.65
+    ]
+   },
+   "panel-edge": {
+    "hex": "#0000001F",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.12
+    ]
+   },
+   "ink-1": {
+    "hex": "#000000D9",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.85
+    ]
+   },
+   "ink-2": {
+    "hex": "#0000008C",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.55
+    ]
+   },
+   "ink-3": {
+    "hex": "#00000047",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.28
+    ]
+   },
+   "separator": {
+    "hex": "#0000001C",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.11
+    ]
+   },
+   "row-hover": {
+    "hex": "#0000000F",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.06
+    ]
+   },
+   "row-press": {
+    "hex": "#0000001C",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.11
+    ]
+   },
+   "fill-off": {
+    "hex": "#00000014",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.08
+    ]
+   },
+   "switch-off": {
+    "hex": "#0000001F",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.12
+    ]
+   },
+   "knob": {
+    "hex": "#FFFFFFFF",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "slider-track": {
+    "hex": "#00000017",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.09
+    ]
+   },
+   "slider-glyph": {
+    "hex": "#0000008C",
+    "rgba": [
+     0.0,
+     0.0,
+     0.0,
+     0.55
+    ]
+   },
+   "accent": {
+    "hex": "#007AFFFF",
+    "rgba": [
+     0.0,
+     0.4784,
+     1.0,
+     1.0
+    ]
+   },
+   "on-accent": {
+    "hex": "#FFFFFFFF",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ]
+   },
+   "accent-text": {
+    "hex": "#0060CCFF",
+    "rgba": [
+     0.0,
+     0.3765,
+     0.8,
+     1.0
+    ]
+   },
+   "green": {
+    "hex": "#34C759FF",
+    "rgba": [
+     0.2039,
+     0.7804,
+     0.349,
+     1.0
+    ]
+   },
+   "red": {
+    "hex": "#FF3B30FF",
+    "rgba": [
+     1.0,
+     0.2314,
+     0.1882,
+     1.0
+    ]
+   },
+   "orange": {
+    "hex": "#FF9500FF",
+    "rgba": [
+     1.0,
+     0.5843,
+     0.0,
+     1.0
+    ]
+   },
+   "focus-ring": {
+    "hex": "#007AFFFF",
+    "rgba": [
+     0.0,
+     0.4784,
+     1.0,
+     1.0
+    ]
+   }
+  }
+ },
+ "metrics": {
+  "spacing": {
+   "bar-pad-x": {
+    "px": 10,
+    "source": "замер"
+   },
+   "bar-item-pad-x": {
+    "px": 10,
+    "source": "замер"
+   },
+   "bar-status-pad-x": {
+    "px": 8,
+    "source": "замер"
+   },
+   "bar-status-gap": {
+    "px": 2,
+    "source": "решение"
+   },
+   "bar-highlight-inset-y": {
+    "px": 4,
+    "source": "замер"
+   },
+   "bar-text-icon-gap": {
+    "px": 5,
+    "source": "замер"
+   },
+   "island-side-gap": {
+    "px": 12,
+    "source": "решение"
+   },
+   "island-compact-inset": {
+    "px": 6,
+    "source": "решение"
+   },
+   "island-pad": {
+    "px": 20,
+    "source": "решение"
+   },
+   "island-body-top": {
+    "px": 12,
+    "source": "решение"
+   },
+   "island-row-gap": {
+    "px": 12,
+    "source": "решение"
+   },
+   "panel-gap": {
+    "px": 6,
+    "source": "замер"
+   },
+   "panel-margin": {
+    "px": 8,
+    "source": "решение"
+   },
+   "panel-pad-y": {
+    "px": 10,
+    "source": "замер"
+   },
+   "panel-row-inset": {
+    "px": 6,
+    "source": "замер"
+   },
+   "panel-content-x": {
+    "px": 16,
+    "source": "замер"
+   },
+   "panel-row-gap": {
+    "px": 10,
+    "source": "замер"
+   },
+   "menu-pad-y": {
+    "px": 5,
+    "source": "замер"
+   },
+   "menu-row-inset": {
+    "px": 5,
+    "source": "замер"
+   },
+   "menu-text-x": {
+    "px": 22,
+    "source": "замер"
+   },
+   "menu-shortcut-x": {
+    "px": 14,
+    "source": "замер"
+   },
+   "sep-margin-y": {
+    "px": 5,
+    "source": "замер"
+   },
+   "sep-inset-x": {
+    "px": 16,
+    "source": "замер"
+   },
+   "sep-inset-x-menu": {
+    "px": 10,
+    "source": "замер"
+   }
+  },
+  "radius": {
+   "radius-bar-highlight": {
+    "px": 6,
+    "source": "замер"
+   },
+   "radius-menu": {
+    "px": 12,
+    "source": "замер"
+   },
+   "radius-menu-row": {
+    "px": 6,
+    "source": "замер"
+   },
+   "radius-panel": {
+    "px": 16,
+    "source": "замер"
+   },
+   "radius-panel-row": {
+    "px": 8,
+    "source": "замер"
+   },
+   "radius-island-idle": {
+    "px": 10,
+    "source": "замер"
+   },
+   "radius-island-music": {
+    "px": 10,
+    "source": "решение"
+   },
+   "radius-island-notify": {
+    "px": 26,
+    "source": "решение"
+   },
+   "radius-island-player": {
+    "px": 32,
+    "source": "решение"
+   },
+   "radius-ear": {
+    "px": 8,
+    "source": "замер"
+   },
+   "radius-ear-player": {
+    "px": 12,
+    "source": "решение"
+   },
+   "radius-art-compact": {
+    "px": 5,
+    "source": "решение"
+   },
+   "radius-art-player": {
+    "px": 12,
+    "source": "решение"
+   },
+   "radius-notify-icon": {
+    "px": 9,
+    "source": "решение"
+   },
+   "radius-layout-box": {
+    "px": 4,
+    "source": "замер"
+   },
+   "radius-slider": {
+    "px": 11,
+    "source": "замер"
+   },
+   "radius-switch": {
+    "px": 9,
+    "source": "замер"
+   }
+  },
+  "size": {
+   "bar-height": {
+    "px": 32,
+    "source": "замер"
+   },
+   "bar-height-classic": {
+    "px": 24,
+    "source": "API"
+   },
+   "bar-icon": {
+    "px": 16,
+    "source": "замер"
+   },
+   "bar-logo": {
+    "px": 14,
+    "source": "решение"
+   },
+   "bar-battery-glyph": {
+    "px": 20,
+    "source": "решение"
+   },
+   "bar-highlight-h": {
+    "px": 24,
+    "source": "замер"
+   },
+   "bar-status-box": {
+    "px": 32,
+    "source": "замер"
+   },
+   "layout-box-w": {
+    "px": 22,
+    "source": "решение"
+   },
+   "layout-box-h": {
+    "px": 15,
+    "source": "решение"
+   },
+   "island-idle-w": {
+    "px": 185,
+    "source": "замер"
+   },
+   "island-music-w": {
+    "px": 300,
+    "source": "решение"
+   },
+   "island-notify-w": {
+    "px": 380,
+    "source": "решение"
+   },
+   "island-notify-h": {
+    "px": 104,
+    "source": "решение"
+   },
+   "island-player-w": {
+    "px": 520,
+    "source": "решение"
+   },
+   "island-player-h": {
+    "px": 190,
+    "source": "решение"
+   },
+   "art-compact": {
+    "px": 20,
+    "source": "решение"
+   },
+   "art-player": {
+    "px": 64,
+    "source": "решение"
+   },
+   "notify-icon": {
+    "px": 36,
+    "source": "решение"
+   },
+   "viz-bar-w": {
+    "px": 3,
+    "source": "решение"
+   },
+   "viz-gap": {
+    "px": 2,
+    "source": "решение"
+   },
+   "viz-min-h": {
+    "px": 3,
+    "source": "решение"
+   },
+   "viz-max-h": {
+    "px": 14,
+    "source": "решение"
+   },
+   "progress-h": {
+    "px": 4,
+    "source": "решение"
+   },
+   "panel-w": {
+    "px": 300,
+    "source": "замер"
+   },
+   "menu-min-w": {
+    "px": 220,
+    "source": "замер"
+   },
+   "menu-row-h": {
+    "px": 22,
+    "source": "замер"
+   },
+   "panel-header-h": {
+    "px": 38,
+    "source": "замер"
+   },
+   "panel-section-h": {
+    "px": 26,
+    "source": "замер"
+   },
+   "panel-row-h": {
+    "px": 34,
+    "source": "замер"
+   },
+   "panel-link-h": {
+    "px": 28,
+    "source": "замер"
+   },
+   "row-circle": {
+    "px": 26,
+    "source": "замер"
+   },
+   "row-glyph": {
+    "px": 13,
+    "source": "замер"
+   },
+   "switch-w": {
+    "px": 32,
+    "source": "замер"
+   },
+   "switch-h": {
+    "px": 18,
+    "source": "замер"
+   },
+   "slider-h": {
+    "px": 22,
+    "source": "замер"
+   },
+   "slider-glyph-size": {
+    "px": 13,
+    "source": "замер"
+   },
+   "stroke-hairline": {
+    "px": 1,
+    "source": "решение"
+   }
+  }
+ },
+ "materials": {
+  "panel": {
+   "blurStdDevPx": 30,
+   "saturation": 1.8,
+   "tint": {
+    "dark": "panel-bg",
+    "light": "panel-bg"
+   },
+   "fallback": "panel-bg-solid",
+   "rim": "panel-rim",
+   "edge": "panel-edge",
+   "d2dChain": "backdrop → GaussianBlur(σ30, BORDER_MODE_HARD) → Saturation(1.8) → Flood(panel-bg) composite SOURCE_OVER → clip RoundedRect(radius-panel)"
+  },
+  "barSolid": {
+   "fill": "bar-bg"
+  },
+  "barGlass": {
+   "blurStdDevPx": 6,
+   "saturation": 1.5,
+   "tint": "bar-glass-tint",
+   "rim": "bar-glass-rim",
+   "refractionEdgePx": 12,
+   "refractionMaxOffsetPx": 6,
+   "inkHalo": "shadow-glass-ink",
+   "note": "Liquid Glass = лёгкий blur + смещение фона к центру в полосе 12 px по краю (Displacement Map) + блик-обводка сверху."
+  },
+  "island": {
+   "fill": "island-bg",
+   "shadowWhenBelowBar": "shadow-island"
+  }
+ },
+ "shadows": {
+  "shadow-panel": {
+   "dark": [
+    {
+     "x": 0.0,
+     "y": 12.0,
+     "blur": 36.0,
+     "spread": 0.0,
+     "d2dStdDev": 18.0,
+     "color": {
+      "hex": "#00000073",
+      "rgba": [
+       0.0,
+       0.0,
+       0.0,
+       0.45
+      ]
+     }
+    },
+    {
+     "x": 0.0,
+     "y": 0.0,
+     "blur": 0.0,
+     "spread": 0.5,
+     "d2dStdDev": 0.0,
+     "color": {
+      "hex": "#00000099",
+      "rgba": [
+       0.0,
+       0.0,
+       0.0,
+       0.6
+      ]
+     }
+    }
+   ],
+   "light": [
+    {
+     "x": 0.0,
+     "y": 12.0,
+     "blur": 36.0,
+     "spread": 0.0,
+     "d2dStdDev": 18.0,
+     "color": {
+      "hex": "#00000033",
+      "rgba": [
+       0.0,
+       0.0,
+       0.0,
+       0.2
+      ]
+     }
+    },
+    {
+     "x": 0.0,
+     "y": 0.0,
+     "blur": 0.0,
+     "spread": 0.5,
+     "d2dStdDev": 0.0,
+     "color": {
+      "hex": "#0000001F",
+      "rgba": [
+       0.0,
+       0.0,
+       0.0,
+       0.12
+      ]
+     }
+    }
+   ]
+  },
+  "shadow-island": {
+   "dark": [
+    {
+     "x": 0.0,
+     "y": 8.0,
+     "blur": 24.0,
+     "spread": 0.0,
+     "d2dStdDev": 12.0,
+     "color": {
+      "hex": "#00000066",
+      "rgba": [
+       0.0,
+       0.0,
+       0.0,
+       0.4
+      ]
+     }
+    }
+   ],
+   "light": [
+    {
+     "x": 0.0,
+     "y": 8.0,
+     "blur": 24.0,
+     "spread": 0.0,
+     "d2dStdDev": 12.0,
+     "color": {
+      "hex": "#00000047",
+      "rgba": [
+       0.0,
+       0.0,
+       0.0,
+       0.28
+      ]
+     }
+    }
+   ]
+  },
+  "shadow-knob": {
+   "dark": [
+    {
+     "x": 0.0,
+     "y": 1.0,
+     "blur": 3.0,
+     "spread": 0.0,
+     "d2dStdDev": 1.5,
+     "color": {
+      "hex": "#00000059",
+      "rgba": [
+       0.0,
+       0.0,
+       0.0,
+       0.35
+      ]
+     }
+    },
+    {
+     "x": 0.0,
+     "y": 0.0,
+     "blur": 0.0,
+     "spread": 0.5,
+     "d2dStdDev": 0.0,
+     "color": {
+      "hex": "#0000001A",
+      "rgba": [
+       0.0,
+       0.0,
+       0.0,
+       0.1
+      ]
+     }
+    }
+   ],
+   "light": [
+    {
+     "x": 0.0,
+     "y": 1.0,
+     "blur": 3.0,
+     "spread": 0.0,
+     "d2dStdDev": 1.5,
+     "color": {
+      "hex": "#00000040",
+      "rgba": [
+       0.0,
+       0.0,
+       0.0,
+       0.25
+      ]
+     }
+    },
+    {
+     "x": 0.0,
+     "y": 0.0,
+     "blur": 0.0,
+     "spread": 0.5,
+     "d2dStdDev": 0.0,
+     "color": {
+      "hex": "#00000014",
+      "rgba": [
+       0.0,
+       0.0,
+       0.0,
+       0.08
+      ]
+     }
+    }
+   ]
+  },
+  "shadow-glass-ink": {
+   "dark": [
+    {
+     "x": 0.0,
+     "y": 0.0,
+     "blur": 6.0,
+     "spread": 0.0,
+     "d2dStdDev": 3.0,
+     "color": {
+      "hex": "#00000059",
+      "rgba": [
+       0.0,
+       0.0,
+       0.0,
+       0.35
+      ]
+     }
+    }
+   ],
+   "light": [
+    {
+     "x": 0.0,
+     "y": 0.0,
+     "blur": 6.0,
+     "spread": 0.0,
+     "d2dStdDev": 3.0,
+     "color": {
+      "hex": "#FFFFFF73",
+      "rgba": [
+       1.0,
+       1.0,
+       1.0,
+       0.45
+      ]
+     }
+    }
+   ]
+  }
+ },
+ "typography": {
+  "families": {
+   "text": "Segoe UI Variable Text",
+   "small": "Segoe UI Variable Small",
+   "display": "Segoe UI Variable Display",
+   "fallback": "Inter",
+   "icons": "Segoe Fluent Icons",
+   "iconsFallbackWin10": "Segoe MDL2 Assets"
+  },
+  "directWrite": "Семейство 'Segoe UI Variable', оси DWRITE_FONT_AXIS_TAG_WEIGHT = weight, DWRITE_FONT_AXIS_TAG_OPTICAL_SIZE = sizePx·0.75 (pt). Именованные инстансы Text/Small/Display дают тот же эффект.",
+  "styles": {
+   "bar-app": {
+    "family": "text",
+    "sizePx": 13,
+    "lineHeightPx": 16,
+    "weight": 700,
+    "trackingPx": -0.08,
+    "opszPt": 9.75,
+    "sfEquivalent": "SF Pro Text 13 Bold",
+    "tabularNums": false,
+    "usage": "Имя активного приложения."
+   },
+   "bar-menu": {
+    "family": "text",
+    "sizePx": 13,
+    "lineHeightPx": 16,
+    "weight": 400,
+    "trackingPx": -0.08,
+    "opszPt": 9.75,
+    "sfEquivalent": "SF Pro Text 13 Regular",
+    "tabularNums": false,
+    "usage": "Пункты меню приложения, дата, процент батареи, погода."
+   },
+   "bar-layout": {
+    "family": "small",
+    "sizePx": 10,
+    "lineHeightPx": 12,
+    "weight": 600,
+    "trackingPx": 0.12,
+    "opszPt": 7.5,
+    "sfEquivalent": "SF Pro Text 10 Semibold",
+    "tabularNums": false,
+    "usage": "Буквы раскладки в рамке."
+   },
+   "island-time": {
+    "family": "text",
+    "sizePx": 13,
+    "lineHeightPx": 16,
+    "weight": 600,
+    "trackingPx": -0.08,
+    "opszPt": 9.75,
+    "sfEquivalent": "SF Pro Text 13 Semibold, tnum",
+    "tabularNums": true,
+    "usage": "Время в покое и в компакте. Цифры моноширинные (tnum)."
+   },
+   "island-title": {
+    "family": "text",
+    "sizePx": 15,
+    "lineHeightPx": 20,
+    "weight": 600,
+    "trackingPx": -0.23,
+    "opszPt": 11.25,
+    "sfEquivalent": "SF Pro Text 15 Semibold",
+    "tabularNums": false,
+    "usage": "Название трека в плеере."
+   },
+   "island-sub": {
+    "family": "text",
+    "sizePx": 13,
+    "lineHeightPx": 16,
+    "weight": 400,
+    "trackingPx": -0.08,
+    "opszPt": 9.75,
+    "sfEquivalent": "SF Pro Text 13 Regular",
+    "tabularNums": false,
+    "usage": "Исполнитель; текст уведомления (12/15)."
+   },
+   "island-notify-title": {
+    "family": "text",
+    "sizePx": 13,
+    "lineHeightPx": 16,
+    "weight": 600,
+    "trackingPx": -0.08,
+    "opszPt": 9.75,
+    "sfEquivalent": "SF Pro Text 13 Semibold",
+    "tabularNums": false,
+    "usage": "Заголовок уведомления."
+   },
+   "island-notify-body": {
+    "family": "text",
+    "sizePx": 12,
+    "lineHeightPx": 15,
+    "weight": 400,
+    "trackingPx": 0,
+    "opszPt": 9.0,
+    "sfEquivalent": "SF Pro Text 12 Regular",
+    "tabularNums": false,
+    "usage": "Текст уведомления, до 2 строк."
+   },
+   "island-meta": {
+    "family": "small",
+    "sizePx": 11,
+    "lineHeightPx": 13,
+    "weight": 500,
+    "trackingPx": 0.06,
+    "opszPt": 8.25,
+    "sfEquivalent": "SF Pro Text 11 Medium, tnum",
+    "tabularNums": true,
+    "usage": "Таймкоды прогресса, «сейчас»."
+   },
+   "panel-title": {
+    "family": "text",
+    "sizePx": 13,
+    "lineHeightPx": 16,
+    "weight": 700,
+    "trackingPx": -0.08,
+    "opszPt": 9.75,
+    "sfEquivalent": "SF Pro Text 13 Bold",
+    "tabularNums": false,
+    "usage": "Заголовок панели (Wi‑Fi, Bluetooth, Звук)."
+   },
+   "panel-section": {
+    "family": "small",
+    "sizePx": 11,
+    "lineHeightPx": 14,
+    "weight": 600,
+    "trackingPx": 0.06,
+    "opszPt": 8.25,
+    "sfEquivalent": "SF Pro Text 11 Semibold",
+    "tabularNums": false,
+    "usage": "Заголовок секции, цвет `ink-2`."
+   },
+   "panel-row": {
+    "family": "text",
+    "sizePx": 13,
+    "lineHeightPx": 16,
+    "weight": 400,
+    "trackingPx": -0.08,
+    "opszPt": 9.75,
+    "sfEquivalent": "SF Pro Text 13 Regular",
+    "tabularNums": false,
+    "usage": "Строка списка, пункт меню, ссылка «Настройки…»."
+   },
+   "panel-caption": {
+    "family": "small",
+    "sizePx": 11,
+    "lineHeightPx": 14,
+    "weight": 400,
+    "trackingPx": 0.06,
+    "opszPt": 8.25,
+    "sfEquivalent": "SF Pro Text 11 Regular",
+    "tabularNums": false,
+    "usage": "Подпись под строкой («Подключено», «82 %»)."
+   }
+  }
+ },
+ "glyphs": {
+  "bluetooth": {
+   "codepoint": "U+E702",
+   "cpp": "L\"\\xE702\"",
+   "fluentName": "Bluetooth",
+   "use": "Bluetooth в баре и в панели",
+   "verifiedInMsDocs": true
+  },
+  "wifi-ghost": {
+   "codepoint": "U+E701",
+   "cpp": "L\"\\xE701\"",
+   "fluentName": "Wifi",
+   "use": "Подложка Wi‑Fi: рисуем при alpha 0.30 под любым уровнем",
+   "verifiedInMsDocs": true
+  },
+  "wifi-0": {
+   "codepoint": "U+E701",
+   "cpp": "L\"\\xE701\"",
+   "fluentName": "Wifi (@0.30)",
+   "use": "Уровень 0: только подложка",
+   "verifiedInMsDocs": true
+  },
+  "wifi-1": {
+   "codepoint": "U+E872",
+   "cpp": "L\"\\xE872\"",
+   "fluentName": "Wifi1",
+   "use": "Уровень 1 поверх подложки",
+   "verifiedInMsDocs": true
+  },
+  "wifi-2": {
+   "codepoint": "U+E873",
+   "cpp": "L\"\\xE873\"",
+   "fluentName": "Wifi2",
+   "use": "Уровень 2 поверх подложки",
+   "verifiedInMsDocs": true
+  },
+  "wifi-3": {
+   "codepoint": "U+E874",
+   "cpp": "L\"\\xE874\"",
+   "fluentName": "Wifi3",
+   "use": "Уровень 3 поверх подложки",
+   "verifiedInMsDocs": true
+  },
+  "wifi-4": {
+   "codepoint": "U+E701",
+   "cpp": "L\"\\xE701\"",
+   "fluentName": "Wifi",
+   "use": "Уровень 4 (полный)",
+   "verifiedInMsDocs": true
+  },
+  "volume-mute": {
+   "codepoint": "U+E74F",
+   "cpp": "L\"\\xE74F\"",
+   "fluentName": "Mute",
+   "use": "Звук выключен",
+   "verifiedInMsDocs": true
+  },
+  "volume-0": {
+   "codepoint": "U+E992",
+   "cpp": "L\"\\xE992\"",
+   "fluentName": "Volume0",
+   "use": "Громкость 0 %, но не mute",
+   "verifiedInMsDocs": false
+  },
+  "volume-1": {
+   "codepoint": "U+E993",
+   "cpp": "L\"\\xE993\"",
+   "fluentName": "Volume1",
+   "use": "1–33 %",
+   "verifiedInMsDocs": false
+  },
+  "volume-2": {
+   "codepoint": "U+E994",
+   "cpp": "L\"\\xE994\"",
+   "fluentName": "Volume2",
+   "use": "34–66 %",
+   "verifiedInMsDocs": false
+  },
+  "volume-3": {
+   "codepoint": "U+E995",
+   "cpp": "L\"\\xE995\"",
+   "fluentName": "Volume3",
+   "use": "67–100 %",
+   "verifiedInMsDocs": false
+  },
+  "battery-0": {
+   "codepoint": "U+E850",
+   "cpp": "L\"\\xE850\"",
+   "fluentName": "Battery0",
+   "use": "0–4 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-1": {
+   "codepoint": "U+E851",
+   "cpp": "L\"\\xE851\"",
+   "fluentName": "Battery1",
+   "use": "5–14 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-2": {
+   "codepoint": "U+E852",
+   "cpp": "L\"\\xE852\"",
+   "fluentName": "Battery2",
+   "use": "15–24 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-3": {
+   "codepoint": "U+E853",
+   "cpp": "L\"\\xE853\"",
+   "fluentName": "Battery3",
+   "use": "25–34 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-4": {
+   "codepoint": "U+E854",
+   "cpp": "L\"\\xE854\"",
+   "fluentName": "Battery4",
+   "use": "35–44 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-5": {
+   "codepoint": "U+E855",
+   "cpp": "L\"\\xE855\"",
+   "fluentName": "Battery5",
+   "use": "45–54 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-6": {
+   "codepoint": "U+E856",
+   "cpp": "L\"\\xE856\"",
+   "fluentName": "Battery6",
+   "use": "55–64 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-7": {
+   "codepoint": "U+E857",
+   "cpp": "L\"\\xE857\"",
+   "fluentName": "Battery7",
+   "use": "65–74 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-8": {
+   "codepoint": "U+E858",
+   "cpp": "L\"\\xE858\"",
+   "fluentName": "Battery8",
+   "use": "75–84 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-9": {
+   "codepoint": "U+E859",
+   "cpp": "L\"\\xE859\"",
+   "fluentName": "Battery9",
+   "use": "85–94 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-10": {
+   "codepoint": "U+E83F",
+   "cpp": "L\"\\xE83F\"",
+   "fluentName": "Battery10",
+   "use": "95–100 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-charging-0": {
+   "codepoint": "U+E85A",
+   "cpp": "L\"\\xE85A\"",
+   "fluentName": "BatteryCharging0",
+   "use": "Зарядка, 0–4 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-charging-1": {
+   "codepoint": "U+E85B",
+   "cpp": "L\"\\xE85B\"",
+   "fluentName": "BatteryCharging1",
+   "use": "Зарядка, 5–14 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-charging-2": {
+   "codepoint": "U+E85C",
+   "cpp": "L\"\\xE85C\"",
+   "fluentName": "BatteryCharging2",
+   "use": "Зарядка, 15–24 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-charging-3": {
+   "codepoint": "U+E85D",
+   "cpp": "L\"\\xE85D\"",
+   "fluentName": "BatteryCharging3",
+   "use": "Зарядка, 25–34 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-charging-4": {
+   "codepoint": "U+E85E",
+   "cpp": "L\"\\xE85E\"",
+   "fluentName": "BatteryCharging4",
+   "use": "Зарядка, 35–44 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-charging-5": {
+   "codepoint": "U+E85F",
+   "cpp": "L\"\\xE85F\"",
+   "fluentName": "BatteryCharging5",
+   "use": "Зарядка, 45–54 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-charging-6": {
+   "codepoint": "U+E860",
+   "cpp": "L\"\\xE860\"",
+   "fluentName": "BatteryCharging6",
+   "use": "Зарядка, 55–64 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-charging-7": {
+   "codepoint": "U+E861",
+   "cpp": "L\"\\xE861\"",
+   "fluentName": "BatteryCharging7",
+   "use": "Зарядка, 65–74 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-charging-8": {
+   "codepoint": "U+E862",
+   "cpp": "L\"\\xE862\"",
+   "fluentName": "BatteryCharging8",
+   "use": "Зарядка, 75–84 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-charging-9": {
+   "codepoint": "U+E83E",
+   "cpp": "L\"\\xE83E\"",
+   "fluentName": "BatteryCharging9",
+   "use": "Зарядка, 85–94 %",
+   "verifiedInMsDocs": true
+  },
+  "battery-charging-10": {
+   "codepoint": "U+EA93",
+   "cpp": "L\"\\xEA93\"",
+   "fluentName": "BatteryCharging10",
+   "use": "Зарядка, 95–100 %",
+   "verifiedInMsDocs": false
+  },
+  "battery-saver-0": {
+   "codepoint": "U+E863",
+   "cpp": "L\"\\xE863\"",
+   "fluentName": "BatterySaver0",
+   "use": "Режим экономии (…E86B = BatterySaver8)",
+   "verifiedInMsDocs": true
+  },
+  "windows-logo": {
+   "codepoint": null,
+   "cpp": null,
+   "fluentName": "нет глифа",
+   "use": "В Segoe Fluent Icons документированного логотипа Windows нет → рисуем геометрией: 4 квадрата 6.5×6.5, зазор 1 (итог 14×14)",
+   "verifiedInMsDocs": true
+  },
+  "keyboard": {
+   "codepoint": "U+E765",
+   "cpp": "L\"\\xE765\"",
+   "fluentName": "KeyboardClassic",
+   "use": "Пункт «Настройки клавиатуры…» в панели раскладки",
+   "verifiedInMsDocs": true
+  },
+  "brightness": {
+   "codepoint": "U+E706",
+   "cpp": "L\"\\xE706\"",
+   "fluentName": "Brightness",
+   "use": "Яркость / погода «ясно»",
+   "verifiedInMsDocs": true
+  },
+  "cloud": {
+   "codepoint": "U+E753",
+   "cpp": "L\"\\xE753\"",
+   "fluentName": "Cloud",
+   "use": "Погода «облачно»",
+   "verifiedInMsDocs": false
+  },
+  "focus": {
+   "codepoint": "U+E708",
+   "cpp": "L\"\\xE708\"",
+   "fluentName": "QuietHours",
+   "use": "Фокус / Не беспокоить",
+   "verifiedInMsDocs": true
+  },
+  "airplane": {
+   "codepoint": "U+E709",
+   "cpp": "L\"\\xE709\"",
+   "fluentName": "Airplane",
+   "use": "Режим полёта",
+   "verifiedInMsDocs": true
+  },
+  "settings": {
+   "codepoint": "U+E713",
+   "cpp": "L\"\\xE713\"",
+   "fluentName": "Settings",
+   "use": "Ссылки «Настройки…»",
+   "verifiedInMsDocs": true
+  },
+  "lock": {
+   "codepoint": "U+E72E",
+   "cpp": "L\"\\xE72E\"",
+   "fluentName": "Lock",
+   "use": "Защищённая сеть в строке Wi‑Fi",
+   "verifiedInMsDocs": true
+  },
+  "checkmark": {
+   "codepoint": "U+E73E",
+   "cpp": "L\"\\xE73E\"",
+   "fluentName": "CheckMark",
+   "use": "Галочка выбранного пункта",
+   "verifiedInMsDocs": true
+  },
+  "chevron-right": {
+   "codepoint": "U+E76C",
+   "cpp": "L\"\\xE76C\"",
+   "fluentName": "ChevronRight",
+   "use": "Подменю / раскрытие строки",
+   "verifiedInMsDocs": true
+  },
+  "play": {
+   "codepoint": "U+E768",
+   "cpp": "L\"\\xE768\"",
+   "fluentName": "Play",
+   "use": "Плеер",
+   "verifiedInMsDocs": true
+  },
+  "pause": {
+   "codepoint": "U+E769",
+   "cpp": "L\"\\xE769\"",
+   "fluentName": "Pause",
+   "use": "Плеер",
+   "verifiedInMsDocs": true
+  },
+  "previous": {
+   "codepoint": "U+E892",
+   "cpp": "L\"\\xE892\"",
+   "fluentName": "Previous",
+   "use": "Плеер",
+   "verifiedInMsDocs": true
+  },
+  "next": {
+   "codepoint": "U+E893",
+   "cpp": "L\"\\xE893\"",
+   "fluentName": "Next",
+   "use": "Плеер",
+   "verifiedInMsDocs": true
+  },
+  "speakers": {
+   "codepoint": "U+E7F5",
+   "cpp": "L\"\\xE7F5\"",
+   "fluentName": "Speakers",
+   "use": "Устройство вывода: динамики",
+   "verifiedInMsDocs": true
+  },
+  "headphone": {
+   "codepoint": "U+E7F6",
+   "cpp": "L\"\\xE7F6\"",
+   "fluentName": "Headphone",
+   "use": "Устройство вывода: наушники",
+   "verifiedInMsDocs": true
+  },
+  "search": {
+   "codepoint": "U+E721",
+   "cpp": "L\"\\xE721\"",
+   "fluentName": "Search",
+   "use": "Поиск",
+   "verifiedInMsDocs": true
+  },
+  "calendar": {
+   "codepoint": "U+E787",
+   "cpp": "L\"\\xE787\"",
+   "fluentName": "Calendar",
+   "use": "Дата / календарь",
+   "verifiedInMsDocs": true
+  }
+ },
+ "glyphRules": {
+  "wifi": "Всегда рисуйте подложку U+E701 с alpha 0.30, поверх — уровень (E872/E873/E874) с alpha 1; уровень 4 = E701 alpha 1; уровень 0 = только подложка.",
+  "battery": "index = pct≥95 ? 10 : pct<5 ? 0 : floor((pct−5)/10)+1; заряжается → BatteryChargingN.",
+  "volume": "muted → E74F; 0 → E992; ≤33 % → E993; ≤66 % → E994; иначе E995.",
+  "windowsLogo": "Глифа нет — 4 квадрата: сторона (size−1)/2, зазор 1 px; при 14 px → 6.5 + 1 + 6.5.",
+  "sizes": {
+   "barIconPx": 16,
+   "batteryPx": 20,
+   "rowGlyphPx": 13,
+   "sliderGlyphPx": 13
+  }
+ },
+ "island": {
+  "states": {
+   "idle": {
+    "width": 185,
+    "height": 32,
+    "radiusBottom": 10,
+    "radiusEar": 8
+   },
+   "music": {
+    "width": 300,
+    "height": 32,
+    "radiusBottom": 10,
+    "radiusEar": 8
+   },
+   "notify": {
+    "width": 380,
+    "height": 104,
+    "radiusBottom": 26,
+    "radiusEar": 12
+   },
+   "player": {
+    "width": 520,
+    "height": 190,
+    "radiusBottom": 32,
+    "radiusEar": 12
+   }
+  },
+  "anchor": "Центр по X экрана, верх = 0. Высота считается от верха экрана, а не от бара.",
+  "shape": "baseline y0 = barHeight (Solid) или 0 (Glass). avail = H − y0; e = min(radiusEar, avail/2); r = min(radiusBottom, W/2, avail − e). Path: M(L−e,y0) Arc(e, CW)→(L,y0+e) L(L,H−r) Arc(r, CCW)→(L+r,H) L(R−r,H) Arc(r, CCW)→(R,H−r) L(R,y0+e) Arc(e, CW)→(R+e,y0) Z.",
+  "content": {
+   "time": {
+    "style": "island-time",
+    "box": "весь верхний пояс 0..barHeight, центр"
+   },
+   "artCompact": {
+    "x": "left + island-compact-inset",
+    "y": 6.0,
+    "size": 20,
+    "radius": 5
+   },
+   "vizCompact": {
+    "right": "right − island-compact-inset − 4",
+    "centerY": 16.0,
+    "bars": 4,
+    "barW": 3,
+    "gap": 2,
+    "minH": 3,
+    "maxH": 14
+   },
+   "artPlayer": {
+    "x": "left + island-pad",
+    "y": 44,
+    "size": 64,
+    "radius": 12
+   },
+   "vizPlayer": {
+    "right": "right − island-pad",
+    "centerY": 54,
+    "maxH": 18
+   },
+   "notifyIcon": {
+    "x": "left + island-pad",
+    "centerY": "barHeight + (H − barHeight − 4)/2",
+    "size": 36,
+    "radius": 9
+   }
+  }
+ },
+ "springs": {
+  "island.expand": {
+   "response": 0.5,
+   "dampingFraction": 0.72,
+   "bounce": 0.28,
+   "mass": 1.0,
+   "stiffness": 157.91,
+   "damping": 18.1,
+   "omega0": 12.566,
+   "overshootPct": 3.84,
+   "t99_ms": 264,
+   "settle_ms": 799,
+   "what": "Остров растёт: width, height, radiusBottom, radiusEar. Все свойства ОДНОЙ пружиной."
+  },
+  "island.collapse": {
+   "response": 0.42,
+   "dampingFraction": 0.92,
+   "bounce": 0.08,
+   "mass": 1.0,
+   "stiffness": 223.8,
+   "damping": 27.53,
+   "omega0": 14.96,
+   "overshootPct": 0.06,
+   "t99_ms": 365,
+   "settle_ms": 444,
+   "what": "Остров сжимается обратно. Почти без отскока."
+  },
+  "island.drop": {
+   "response": 0.55,
+   "dampingFraction": 0.64,
+   "bounce": 0.36,
+   "mass": 1.0,
+   "stiffness": 130.51,
+   "damping": 14.62,
+   "omega0": 11.424,
+   "overshootPct": 7.3,
+   "t99_ms": 253,
+   "settle_ms": 902,
+   "what": "Высота баннера уведомления «стекает» вниз — единственное место с заметным отскоком."
+  },
+  "island.content": {
+   "response": 0.32,
+   "dampingFraction": 1.0,
+   "bounce": 0.0,
+   "mass": 1.0,
+   "stiffness": 385.53,
+   "damping": 39.27,
+   "omega0": 19.635,
+   "overshootPct": 0.0,
+   "t99_ms": 340,
+   "settle_ms": 475,
+   "what": "Появление контента внутри острова: opacity, scale, translateY, blur."
+  },
+  "island.art": {
+   "response": 0.5,
+   "dampingFraction": 0.8,
+   "bounce": 0.2,
+   "mass": 1.0,
+   "stiffness": 157.91,
+   "damping": 20.11,
+   "omega0": 12.566,
+   "overshootPct": 1.52,
+   "t99_ms": 314,
+   "settle_ms": 673,
+   "what": "Обложка (matched geometry): x, y, size, radius между компактом и плеером."
+  },
+  "bar.items": {
+   "response": 0.3,
+   "dampingFraction": 1.0,
+   "bounce": 0.0,
+   "mass": 1.0,
+   "stiffness": 438.65,
+   "damping": 41.89,
+   "omega0": 20.944,
+   "overshootPct": 0.0,
+   "t99_ms": 319,
+   "settle_ms": 445,
+   "what": "Плашки бара прячутся/возвращаются при расширении острова: opacity, translateX, scale."
+  },
+  "panel.open": {
+   "response": 0.34,
+   "dampingFraction": 0.8,
+   "bounce": 0.2,
+   "mass": 1.0,
+   "stiffness": 341.51,
+   "damping": 29.57,
+   "omega0": 18.48,
+   "overshootPct": 1.52,
+   "t99_ms": 214,
+   "settle_ms": 458,
+   "what": "Панель/меню: scale 0.94→1 и translateY −6→0 от точки под иконкой."
+  },
+  "panel.fade": {
+   "response": 0.22,
+   "dampingFraction": 1.0,
+   "bounce": 0.0,
+   "mass": 1.0,
+   "stiffness": 815.67,
+   "damping": 57.12,
+   "omega0": 28.56,
+   "overshootPct": 0.0,
+   "t99_ms": 235,
+   "settle_ms": 328,
+   "what": "Панель/меню: opacity 0→1 при открытии."
+  },
+  "switch.knob": {
+   "response": 0.28,
+   "dampingFraction": 0.78,
+   "bounce": 0.22,
+   "mass": 1.0,
+   "stiffness": 503.55,
+   "damping": 35.01,
+   "omega0": 22.44,
+   "overshootPct": 1.99,
+   "t99_ms": 168,
+   "settle_ms": 369,
+   "what": "Бегунок переключателя: translateX 0↔14."
+  },
+  "slider.jump": {
+   "response": 0.3,
+   "dampingFraction": 1.0,
+   "bounce": 0.0,
+   "mass": 1.0,
+   "stiffness": 438.65,
+   "damping": 41.89,
+   "omega0": 20.944,
+   "overshootPct": 0.0,
+   "t99_ms": 319,
+   "settle_ms": 445,
+   "what": "Клик по треку слайдера: заливка доезжает до точки."
+  },
+  "viz.bar": {
+   "response": 0.2,
+   "dampingFraction": 0.55,
+   "bounce": 0.45,
+   "mass": 1.0,
+   "stiffness": 986.96,
+   "damping": 34.56,
+   "omega0": 31.416,
+   "overshootPct": 12.63,
+   "t99_ms": 81,
+   "settle_ms": 399,
+   "what": "Столбик визуализатора: height к случайной цели каждые 150 мс."
+  },
+  "highlight.slide": {
+   "response": 0.25,
+   "dampingFraction": 1.0,
+   "bounce": 0.0,
+   "mass": 1.0,
+   "stiffness": 631.65,
+   "damping": 50.27,
+   "omega0": 25.133,
+   "overshootPct": 0.0,
+   "t99_ms": 266,
+   "settle_ms": 372,
+   "what": "ОПЦИЯ: плашка подсветки переезжает между иконками при menu tracking (в macOS — мгновенно)."
+  }
+ },
+ "springFormula": {
+  "stiffness": "k = m·(2π/response)²",
+  "damping": "c = 4π·m·dampingFraction/response",
+  "bounce": "bounce = 1 − dampingFraction (SwiftUI .spring(duration:bounce:) — duration = response)",
+  "integrator": "semi-implicit Euler, подшаг ≤ 2 мс; settled: |x−target| < 0.01 px и |v| < 0.1 px/с"
+ },
+ "tweens": {
+  "island.content.out": {
+   "ms": 120,
+   "easing": "cubic-bezier(0.4, 0, 1, 1)",
+   "bezier": [
+    0.4,
+    0.0,
+    1.0,
+    1.0
+   ],
+   "what": "opacity 1→0, scale 1→0.96, blur 0→4 — уход контента перед сжатием."
+  },
+  "panel.close": {
+   "ms": 160,
+   "easing": "cubic-bezier(0, 0, 0.2, 1)",
+   "bezier": [
+    0.0,
+    0.0,
+    0.2,
+    1.0
+   ],
+   "what": "opacity 1→0, scale 1→0.98 (без отскока)."
+  },
+  "highlight.off": {
+   "ms": 120,
+   "easing": "linear",
+   "bezier": [
+    0,
+    0,
+    1,
+    1
+   ],
+   "what": "Плашка подсветки иконки гаснет после закрытия панели."
+  },
+  "switch.track": {
+   "ms": 180,
+   "easing": "cubic-bezier(0.2, 0, 0, 1)",
+   "bezier": [
+    0.2,
+    0.0,
+    0.0,
+    1.0
+   ],
+   "what": "Цвет трека переключателя `switch-off` ↔ `accent`."
+  },
+  "tile.hover": {
+   "ms": 90,
+   "easing": "linear",
+   "bezier": [
+    0,
+    0,
+    1,
+    1
+   ],
+   "what": "Hover плиток/строк в панелях Tahoe (строки меню — мгновенно)."
+  }
+ },
+ "delays": {
+  "content_in_after_shell_ms": 70,
+  "shell_collapse_after_content_out_ms": 40,
+  "content_stagger_ms": 20,
+  "bar_items_return_stagger_ms": 25,
+  "notify_hold_ms": 4000,
+  "hover_open_dwell_ms": 400,
+  "menu_tracking_switch_ms": 0
+ }
+}

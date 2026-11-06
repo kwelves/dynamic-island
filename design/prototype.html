@@ -1,0 +1,1198 @@
+<!doctype html>
+<html data-theme="dark" lang="ru">
+<head><meta name="viewport" content="width=device-width, initial-scale=1"><style>:root, [data-theme="dark"] {
+  --bar-bg: #000000;
+  --bar-ink: #ffffff;
+  --bar-ink-2: rgba(255,255,255,0.60);
+  --bar-highlight: rgba(255,255,255,0.22);
+  --island-bg: #000000;
+  --island-ink-2: rgba(255,255,255,0.60);
+  --island-track: rgba(255,255,255,0.20);
+  --bar-glass-tint: rgba(20,20,22,0.36);
+  --bar-glass-ink: #ffffff;
+  --bar-glass-rim: rgba(255,255,255,0.28);
+  --bar-glass-highlight: rgba(255,255,255,0.22);
+  --panel-bg: rgba(38,38,40,0.80);
+  --panel-bg-solid: #262628;
+  --panel-rim: rgba(255,255,255,0.13);
+  --panel-edge: rgba(0,0,0,0.55);
+  --ink-1: rgba(255,255,255,0.86);
+  --ink-2: rgba(255,255,255,0.56);
+  --ink-3: rgba(255,255,255,0.28);
+  --separator: rgba(255,255,255,0.11);
+  --row-hover: rgba(255,255,255,0.10);
+  --row-press: rgba(255,255,255,0.17);
+  --fill-off: rgba(255,255,255,0.13);
+  --switch-off: rgba(255,255,255,0.19);
+  --knob: #ffffff;
+  --slider-track: rgba(255,255,255,0.14);
+  --slider-glyph: rgba(0,0,0,0.55);
+  --accent: #0a84ff;
+  --on-accent: #ffffff;
+  --accent-text: #409cff;
+  --green: #30d158;
+  --red: #ff453a;
+  --orange: #ff9f0a;
+  --focus-ring: #0a84ff;
+  --shadow-panel: 0 12px 36px rgba(0,0,0,0.45), 0 0 0 0.5px rgba(0,0,0,0.60);
+  --shadow-island: 0 8px 24px rgba(0,0,0,0.40);
+  --shadow-knob: 0 1px 3px rgba(0,0,0,0.35), 0 0 0 0.5px rgba(0,0,0,0.10);
+  --shadow-glass-ink: 0 0 6px rgba(0,0,0,0.35);
+}
+[data-theme="light"] {
+  --bar-bg: #000000;
+  --bar-ink: #ffffff;
+  --bar-ink-2: rgba(255,255,255,0.60);
+  --bar-highlight: rgba(255,255,255,0.22);
+  --island-bg: #000000;
+  --island-ink-2: rgba(255,255,255,0.60);
+  --island-track: rgba(255,255,255,0.20);
+  --bar-glass-tint: rgba(250,250,252,0.42);
+  --bar-glass-ink: rgba(0,0,0,0.85);
+  --bar-glass-rim: rgba(255,255,255,0.70);
+  --bar-glass-highlight: rgba(0,0,0,0.10);
+  --panel-bg: rgba(244,244,246,0.80);
+  --panel-bg-solid: #ececee;
+  --panel-rim: rgba(255,255,255,0.65);
+  --panel-edge: rgba(0,0,0,0.12);
+  --ink-1: rgba(0,0,0,0.85);
+  --ink-2: rgba(0,0,0,0.55);
+  --ink-3: rgba(0,0,0,0.28);
+  --separator: rgba(0,0,0,0.11);
+  --row-hover: rgba(0,0,0,0.06);
+  --row-press: rgba(0,0,0,0.11);
+  --fill-off: rgba(0,0,0,0.08);
+  --switch-off: rgba(0,0,0,0.12);
+  --knob: #ffffff;
+  --slider-track: rgba(0,0,0,0.09);
+  --slider-glyph: rgba(0,0,0,0.55);
+  --accent: #007aff;
+  --on-accent: #ffffff;
+  --accent-text: #0060cc;
+  --green: #34c759;
+  --red: #ff3b30;
+  --orange: #ff9500;
+  --focus-ring: #007aff;
+  --shadow-panel: 0 12px 36px rgba(0,0,0,0.20), 0 0 0 0.5px rgba(0,0,0,0.12);
+  --shadow-island: 0 8px 24px rgba(0,0,0,0.28);
+  --shadow-knob: 0 1px 3px rgba(0,0,0,0.25), 0 0 0 0.5px rgba(0,0,0,0.08);
+  --shadow-glass-ink: 0 0 6px rgba(255,255,255,0.45);
+}
+:root {
+  --bar-pad-x: 10px;
+  --bar-item-pad-x: 10px;
+  --bar-status-pad-x: 8px;
+  --bar-status-gap: 2px;
+  --bar-highlight-inset-y: 4px;
+  --bar-text-icon-gap: 5px;
+  --island-side-gap: 12px;
+  --island-compact-inset: 6px;
+  --island-pad: 20px;
+  --island-body-top: 12px;
+  --island-row-gap: 12px;
+  --panel-gap: 6px;
+  --panel-margin: 8px;
+  --panel-pad-y: 10px;
+  --panel-row-inset: 6px;
+  --panel-content-x: 16px;
+  --panel-row-gap: 10px;
+  --menu-pad-y: 5px;
+  --menu-row-inset: 5px;
+  --menu-text-x: 22px;
+  --menu-shortcut-x: 14px;
+  --sep-margin-y: 5px;
+  --sep-inset-x: 16px;
+  --sep-inset-x-menu: 10px;
+  --radius-bar-highlight: 6px;
+  --radius-menu: 12px;
+  --radius-menu-row: 6px;
+  --radius-panel: 16px;
+  --radius-panel-row: 8px;
+  --radius-island-idle: 10px;
+  --radius-island-music: 10px;
+  --radius-island-notify: 26px;
+  --radius-island-player: 32px;
+  --radius-ear: 8px;
+  --radius-ear-player: 12px;
+  --radius-art-compact: 5px;
+  --radius-art-player: 12px;
+  --radius-notify-icon: 9px;
+  --radius-layout-box: 4px;
+  --radius-slider: 11px;
+  --radius-switch: 9px;
+  --bar-height: 32px;
+  --bar-height-classic: 24px;
+  --bar-icon: 16px;
+  --bar-logo: 14px;
+  --bar-battery-glyph: 20px;
+  --bar-highlight-h: 24px;
+  --bar-status-box: 32px;
+  --layout-box-w: 22px;
+  --layout-box-h: 15px;
+  --island-idle-w: 185px;
+  --island-music-w: 300px;
+  --island-notify-w: 380px;
+  --island-notify-h: 104px;
+  --island-player-w: 520px;
+  --island-player-h: 190px;
+  --art-compact: 20px;
+  --art-player: 64px;
+  --notify-icon: 36px;
+  --viz-bar-w: 3px;
+  --viz-gap: 2px;
+  --viz-min-h: 3px;
+  --viz-max-h: 14px;
+  --progress-h: 4px;
+  --panel-w: 300px;
+  --menu-min-w: 220px;
+  --menu-row-h: 22px;
+  --panel-header-h: 38px;
+  --panel-section-h: 26px;
+  --panel-row-h: 34px;
+  --panel-link-h: 28px;
+  --row-circle: 26px;
+  --row-glyph: 13px;
+  --switch-w: 32px;
+  --switch-h: 18px;
+  --slider-h: 22px;
+  --slider-glyph-size: 13px;
+  --stroke-hairline: 1px;
+  --blur-panel: 30px;
+  --saturate-panel: 1.8;
+  --blur-glass: 6px;
+  --saturate-glass: 1.5;
+  --glass-refraction: 12px;
+  --font-text: "Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI", Inter, system-ui, sans-serif;
+  --font-small: "Segoe UI Variable Small", "Segoe UI Variable", "Segoe UI", Inter, system-ui, sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI Variable", "Segoe UI", Inter, system-ui, sans-serif;
+  --font-icons: "Segoe Fluent Icons", "Segoe MDL2 Assets";
+}
+.bar-app { font-family: var(--font-text); font-size: 13px; line-height: 16px; font-weight: 700; letter-spacing: -0.08px; }
+.bar-menu { font-family: var(--font-text); font-size: 13px; line-height: 16px; font-weight: 400; letter-spacing: -0.08px; }
+.bar-layout { font-family: var(--font-small); font-size: 10px; line-height: 12px; font-weight: 600; letter-spacing: 0.12px; }
+.island-time { font-family: var(--font-text); font-size: 13px; line-height: 16px; font-weight: 600; letter-spacing: -0.08px; }
+.island-title { font-family: var(--font-text); font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -0.23px; }
+.island-sub { font-family: var(--font-text); font-size: 13px; line-height: 16px; font-weight: 400; letter-spacing: -0.08px; }
+.island-notify-title { font-family: var(--font-text); font-size: 13px; line-height: 16px; font-weight: 600; letter-spacing: -0.08px; }
+.island-notify-body { font-family: var(--font-text); font-size: 12px; line-height: 15px; font-weight: 400; letter-spacing: 0px; }
+.island-meta { font-family: var(--font-small); font-size: 11px; line-height: 13px; font-weight: 500; letter-spacing: 0.06px; }
+.panel-title { font-family: var(--font-text); font-size: 13px; line-height: 16px; font-weight: 700; letter-spacing: -0.08px; }
+.panel-section { font-family: var(--font-small); font-size: 11px; line-height: 14px; font-weight: 600; letter-spacing: 0.06px; }
+.panel-row { font-family: var(--font-text); font-size: 13px; line-height: 16px; font-weight: 400; letter-spacing: -0.08px; }
+.panel-caption { font-family: var(--font-small); font-size: 11px; line-height: 14px; font-weight: 400; letter-spacing: 0.06px; }
+/* MacBar — стили компонентов. Все значения — токены из tokens.json (var(--…)). */
+.mb-screen { position: relative; overflow: hidden; border-radius: 10px; background: #111416; font-family: var(--font-text); color: var(--ink-1); -webkit-font-smoothing: antialiased; user-select: none; isolation: isolate; cursor: default; }
+.mb-screen.has-wall { background:
+  radial-gradient(60% 85% at 12% 92%, #c8643a 0%, rgba(200,100,58,0) 62%),
+  radial-gradient(50% 75% at 88% 30%, #2c6e6a 0%, rgba(44,110,106,0) 66%),
+  radial-gradient(38% 55% at 58% 96%, #d9a35a 0%, rgba(217,163,90,0) 62%),
+  #15191b; }
+[data-theme="light"] .mb-screen.has-wall { background:
+  radial-gradient(60% 85% at 12% 92%, #f2a77c 0%, rgba(242,167,124,0) 62%),
+  radial-gradient(50% 75% at 88% 30%, #8cc3bb 0%, rgba(140,195,187,0) 66%),
+  radial-gradient(38% 55% at 58% 96%, #ecc98e 0%, rgba(236,201,142,0) 62%),
+  #efe9df; }
+
+/* ---------- бар */
+.mb-bar { position: absolute; left: 0; top: 0; right: 0; height: var(--bar-height); background: var(--bar-bg); color: var(--bar-ink); display: flex; justify-content: space-between; align-items: center; padding: 0 var(--bar-pad-x); box-sizing: border-box; z-index: 2; }
+.mb-screen[data-mode="glass"] .mb-bar { background: var(--bar-glass-tint); -webkit-backdrop-filter: blur(var(--blur-glass)) saturate(var(--saturate-glass)); backdrop-filter: blur(var(--blur-glass)) saturate(var(--saturate-glass)); color: var(--bar-glass-ink); box-shadow: inset 0 -1px 0 var(--bar-glass-rim); }
+.mb-screen[data-mode="glass"] .mb-bar-left, .mb-screen[data-mode="glass"] .mb-bar-right { filter: drop-shadow(var(--shadow-glass-ink)); }
+.mb-bar-left, .mb-bar-right { position: relative; z-index: 1; display: flex; align-items: center; height: 100%; }
+.mb-bar-right { gap: var(--bar-status-gap); }
+.mb-item { position: relative; height: 100%; display: flex; align-items: center; justify-content: center; padding: 0 var(--bar-item-pad-x); white-space: nowrap; transform-origin: center; box-sizing: border-box; }
+.mb-item-status, .mb-item-battery { padding: 0 var(--bar-status-pad-x); }
+.mb-hl { position: absolute; top: var(--bar-highlight-inset-y); height: var(--bar-highlight-h); border-radius: var(--radius-bar-highlight); background: var(--bar-highlight); opacity: 0; z-index: 0; pointer-events: none; }
+.mb-screen[data-mode="glass"] .mb-hl { background: var(--bar-glass-highlight); }
+.mb-gap { display: inline-block; width: var(--bar-text-icon-gap); }
+.mb-dim { color: var(--bar-ink-2); }
+.mb-screen[data-mode="glass"] .mb-dim { color: inherit; opacity: .6; }
+.mb-tnum { font-variant-numeric: tabular-nums; }
+.mb-item.is-dim .mb-ic { opacity: .45; }
+.mb-red { color: var(--red); }
+.mb-layout-box { display: inline-flex; align-items: center; justify-content: center; width: var(--layout-box-w); height: var(--layout-box-h); border: 1.25px solid currentColor; border-radius: var(--radius-layout-box); box-sizing: border-box; }
+
+/* ---------- иконки */
+.mb-ic { display: inline-flex; align-items: center; justify-content: center; position: relative; line-height: 1; flex: none; }
+.mb-g { font-family: var(--font-icons); font-style: normal; font-weight: normal; line-height: 1; display: block; }
+.mb-stack .mb-g { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+.mb-ghost { opacity: .3; }
+.mb-svg { display: block; overflow: visible; }
+
+/* ---------- остров */
+.mb-island { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+.mb-island-shape { position: absolute; left: 0; top: 0; overflow: visible; }
+.mb-island-shape path { fill: var(--island-bg); }
+.mb-island-clip { position: absolute; top: 0; overflow: hidden; pointer-events: auto; color: var(--bar-ink); }
+.mb-island.is-below .mb-island-clip, .mb-screen[data-mode="glass"] .mb-island-clip { box-shadow: var(--shadow-island); }
+.mb-i-time { position: absolute; left: 0; right: 0; top: 0; height: var(--bar-height); display: flex; align-items: center; justify-content: center; }
+.mb-i-art { position: absolute; background: linear-gradient(135deg, #e8693a 0%, #f2b45a 55%, #f7dc8b 100%); overflow: hidden; }
+.mb-i-art::after { content: ""; position: absolute; left: 18%; top: 18%; width: 64%; height: 64%; border-radius: 50%; border: 1.5px solid rgba(255,255,255,.55); box-sizing: border-box; }
+.mb-i-viz { position: absolute; display: flex; align-items: center; gap: var(--viz-gap); height: 0; }
+.mb-i-viz span { display: block; width: var(--viz-bar-w); border-radius: 2px; background: #f2b45a; }
+.mb-i-dot { display: none; }
+.mb-i-layer { position: absolute; top: var(--bar-height); box-sizing: border-box; transform-origin: 50% 0; }
+.mb-i-notify { width: var(--island-notify-w); height: calc(var(--island-notify-h) - var(--bar-height)); display: flex; align-items: center; gap: var(--island-row-gap); padding: 0 var(--island-pad) 4px; }
+.mb-n-icon { width: var(--notify-icon); height: var(--notify-icon); border-radius: var(--radius-notify-icon); background: var(--accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center; flex: none; }
+.mb-n-text { flex: 1; min-width: 0; }
+.mb-n-head { display: flex; align-items: baseline; justify-content: space-between; }
+.mb-n-when { color: var(--island-ink-2); }
+.mb-n-body { color: var(--island-ink-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mb-i-player { width: var(--island-player-w); height: calc(var(--island-player-h) - var(--bar-height)); }
+.mb-p-text { position: absolute; left: calc(var(--island-pad) + var(--art-player) + var(--island-row-gap)); right: calc(var(--island-pad) + 30px); top: calc(var(--island-body-top) + 12px); }
+.mb-p-title, .mb-p-artist { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mb-p-artist { color: var(--island-ink-2); }
+.mb-p-prog { position: absolute; left: var(--island-pad); right: var(--island-pad); top: calc(var(--island-body-top) + var(--art-player) + var(--island-row-gap)); }
+.mb-p-track { height: var(--progress-h); border-radius: calc(var(--progress-h) / 2); background: var(--island-track); overflow: hidden; }
+.mb-p-fill { height: 100%; background: var(--bar-ink); border-radius: inherit; }
+.mb-p-times { display: flex; justify-content: space-between; margin-top: 4px; color: var(--island-ink-2); }
+.mb-p-ctrl { position: absolute; left: 0; right: 0; top: calc(var(--island-body-top) + var(--art-player) + var(--island-row-gap) * 2 + 14px); display: flex; justify-content: center; gap: 28px; }
+.mb-p-btn { appearance: none; background: none; border: 0; padding: 0; color: var(--bar-ink); width: 44px; height: 32px; border-radius: 16px; display: flex; align-items: center; justify-content: center; }
+.mb-p-btn:hover { background: var(--island-track); }
+
+/* ---------- панели и меню */
+.mb-panel-layer { position: absolute; inset: 0; pointer-events: none; z-index: 4; }
+.mb-panel, .mb-menu { position: absolute; pointer-events: auto; background: var(--panel-bg); -webkit-backdrop-filter: blur(var(--blur-panel)) saturate(var(--saturate-panel)); backdrop-filter: blur(var(--blur-panel)) saturate(var(--saturate-panel)); box-shadow: var(--shadow-panel), inset 0 0 0 1px var(--panel-rim); color: var(--ink-1); box-sizing: border-box; }
+.mb-panel { width: var(--panel-w); border-radius: var(--radius-panel); padding: var(--panel-pad-y) 0; }
+.mb-menu { min-width: var(--menu-min-w); border-radius: var(--radius-menu); padding: var(--menu-pad-y) 0; }
+.mb-static .mb-panel, .mb-static .mb-menu { position: relative; }
+.mb-header { display: flex; align-items: center; justify-content: space-between; height: var(--panel-header-h); padding: 0 var(--panel-content-x); }
+.mb-header-value { color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.mb-section { height: var(--panel-section-h); display: flex; align-items: flex-end; padding: 0 var(--panel-content-x) 4px; color: var(--ink-2); box-sizing: border-box; }
+.mb-caption { padding: 0 var(--panel-content-x) 4px; color: var(--ink-2); }
+.mb-row, .mb-link { display: flex; align-items: center; margin: 0 var(--panel-row-inset); padding: 0 calc(var(--panel-content-x) - var(--panel-row-inset)); border-radius: var(--radius-panel-row); }
+.mb-row { height: var(--panel-row-h); gap: var(--panel-row-gap); }
+.mb-link { height: var(--panel-link-h); }
+.mb-row:hover, .mb-link:hover, .mb-row.is-hover, .mb-link.is-hover { background: var(--row-hover); }
+.mb-row.is-press, .mb-link.is-press { background: var(--row-press); }
+.mb-row.is-plain:hover { background: none; }
+.mb-row-circle { width: var(--row-circle); height: var(--row-circle); border-radius: 50%; background: var(--fill-off); color: var(--ink-1); display: flex; align-items: center; justify-content: center; flex: none; }
+.mb-row.is-on .mb-row-circle { background: var(--accent); color: var(--on-accent); }
+.mb-row.is-plain .mb-row-circle { background: var(--fill-off); }
+.mb-row-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mb-row-cap { color: var(--ink-2); }
+.mb-row-trail { color: var(--ink-2); display: flex; }
+.mb-row-check { visibility: hidden; color: var(--ink-1); }
+.mb-row.is-on .mb-row-check { visibility: visible; }
+.mb-row[data-group="out"].is-on .mb-row-circle { background: var(--fill-off); color: var(--ink-1); }
+.mb-sep { height: var(--stroke-hairline); background: var(--separator); margin: var(--sep-margin-y) var(--sep-inset-x); }
+.mb-sep-menu { margin: var(--sep-margin-y) var(--sep-inset-x-menu); }
+.is-off .mb-row, .is-off .mb-section { opacity: .35; pointer-events: none; }
+.mb-switch { appearance: none; border: 0; padding: 0; position: relative; flex: none; width: var(--switch-w); height: var(--switch-h); border-radius: var(--radius-switch); background: var(--switch-off); transition: background-color 180ms cubic-bezier(0.2, 0, 0, 1); }
+.mb-switch.is-on { background: var(--accent); }
+.mb-knob { position: absolute; left: 1px; top: 1px; width: calc(var(--switch-h) - 2px); height: calc(var(--switch-h) - 2px); border-radius: 50%; background: var(--knob); box-shadow: var(--shadow-knob); }
+.mb-switch:focus-visible, .mb-row:focus-visible, .mb-item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.mb-slider-row { padding: 2px var(--panel-content-x) 8px; }
+.mb-slider { position: relative; height: var(--slider-h); border-radius: var(--radius-slider); background: var(--slider-track); overflow: hidden; touch-action: none; }
+.mb-slider-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--knob); border-radius: var(--radius-slider); box-shadow: var(--shadow-knob); }
+.mb-slider-glyph { position: absolute; left: 0; top: 0; width: var(--slider-h); height: 100%; display: flex; align-items: center; justify-content: center; color: var(--slider-glyph); }
+.mb-mi { display: flex; align-items: center; height: var(--menu-row-h); margin: 0 var(--menu-row-inset); padding-right: calc(var(--menu-shortcut-x) - var(--menu-row-inset)); border-radius: var(--radius-menu-row); white-space: nowrap; }
+.mb-mi-check { width: calc(var(--menu-text-x) - var(--menu-row-inset)); display: flex; justify-content: center; flex: none; }
+.mb-mi-title { flex: 1; padding-right: 28px; }
+.mb-mi-key { color: var(--ink-2); display: flex; align-items: center; }
+.mb-mi:hover, .mb-mi.is-hover { background: var(--accent); color: var(--on-accent); }
+.mb-mi:hover .mb-mi-key, .mb-mi.is-hover .mb-mi-key { color: var(--on-accent); opacity: .8; }
+.mb-mi.is-blink { background: transparent !important; color: var(--ink-1) !important; }
+.mb-mi.is-disabled, .mb-mi.is-disabled:hover { background: none; color: var(--ink-3); }
+.mb-mi.is-disabled .mb-mi-key { color: var(--ink-3); }
+
+/* ---------- обвязка превью и прототипа */
+.mb-page { font-family: var(--font-text); color: var(--ink-1); background: var(--panel-bg-solid); padding: 20px; box-sizing: border-box; min-height: 100vh; }
+.mb-controls { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 14px; align-items: center; }
+.mb-ctl { display: flex; align-items: center; gap: 8px; }
+.mb-ctl-label { color: var(--ink-2); }
+.mb-seg { display: inline-flex; background: var(--fill-off); border-radius: 8px; padding: 2px; gap: 2px; }
+.mb-seg button { appearance: none; border: 0; background: none; color: var(--ink-1); font: inherit; height: 24px; padding: 0 10px; border-radius: 6px; }
+.mb-seg button:hover { background: var(--row-hover); }
+.mb-seg button.is-on { background: var(--accent); color: var(--on-accent); }
+.mb-seg button:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.mb-readout { margin-top: 10px; color: var(--ink-2); font-variant-numeric: tabular-nums; min-height: 16px; }
+.mb-hint { color: var(--ink-2); margin-top: 6px; }
+.mb-grid { display: grid; gap: 24px 20px; }
+.mb-tile-label { margin: 8px 0 16px; color: var(--ink-2); }
+.mb-tile-label b { color: var(--ink-1); font-weight: 600; }
+.mb-static { position: relative; }
+.mb-static .mb-panel, .mb-static .mb-menu { -webkit-backdrop-filter: none; backdrop-filter: none; background: var(--panel-bg-solid); }
+.mb-row-flex { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+.mb-redline .mb-item { outline: 1px dashed rgba(255, 159, 10, .9); outline-offset: -1px; }
+.mb-redline-label { position: absolute; top: calc(var(--bar-height) + 4px); transform: translateX(-50%); color: var(--orange); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.mb-states { display: grid; grid-template-columns: repeat(4, auto); gap: 10px 22px; align-items: center; justify-content: start; }
+.mb-states .mb-panel, .mb-states .mb-menu { position: relative; }
+
+body{margin:0;background:var(--panel-bg-solid)}</style><script>/* MacBar — движок прототипа (пружины, иконки, бар, остров, панели). window.MacBar */
+window.MacBar = window.MacBar || {};
+window.MacBar.SPEC = {"px": {"bar-pad-x": 10, "bar-item-pad-x": 10, "bar-status-pad-x": 8, "bar-status-gap": 2, "bar-highlight-inset-y": 4, "bar-text-icon-gap": 5, "island-side-gap": 12, "island-compact-inset": 6, "island-pad": 20, "island-body-top": 12, "island-row-gap": 12, "panel-gap": 6, "panel-margin": 8, "panel-pad-y": 10, "panel-row-inset": 6, "panel-content-x": 16, "panel-row-gap": 10, "menu-pad-y": 5, "menu-row-inset": 5, "menu-text-x": 22, "menu-shortcut-x": 14, "sep-margin-y": 5, "sep-inset-x": 16, "sep-inset-x-menu": 10, "radius-bar-highlight": 6, "radius-menu": 12, "radius-menu-row": 6, "radius-panel": 16, "radius-panel-row": 8, "radius-island-idle": 10, "radius-island-music": 10, "radius-island-notify": 26, "radius-island-player": 32, "radius-ear": 8, "radius-ear-player": 12, "radius-art-compact": 5, "radius-art-player": 12, "radius-notify-icon": 9, "radius-layout-box": 4, "radius-slider": 11, "radius-switch": 9, "bar-height": 32, "bar-height-classic": 24, "bar-icon": 16, "bar-logo": 14, "bar-battery-glyph": 20, "bar-highlight-h": 24, "bar-status-box": 32, "layout-box-w": 22, "layout-box-h": 15, "island-idle-w": 185, "island-music-w": 300, "island-notify-w": 380, "island-notify-h": 104, "island-player-w": 520, "island-player-h": 190, "art-compact": 20, "art-player": 64, "notify-icon": 36, "viz-bar-w": 3, "viz-gap": 2, "viz-min-h": 3, "viz-max-h": 14, "progress-h": 4, "panel-w": 300, "menu-min-w": 220, "menu-row-h": 22, "panel-header-h": 38, "panel-section-h": 26, "panel-row-h": 34, "panel-link-h": 28, "row-circle": 26, "row-glyph": 13, "switch-w": 32, "switch-h": 18, "slider-h": 22, "slider-glyph-size": 13, "stroke-hairline": 1}, "springs": {"island.expand": {"response": 0.5, "dampingFraction": 0.72, "stiffness": 157.91, "damping": 18.1}, "island.collapse": {"response": 0.42, "dampingFraction": 0.92, "stiffness": 223.8, "damping": 27.53}, "island.drop": {"response": 0.55, "dampingFraction": 0.64, "stiffness": 130.51, "damping": 14.62}, "island.content": {"response": 0.32, "dampingFraction": 1.0, "stiffness": 385.53, "damping": 39.27}, "island.art": {"response": 0.5, "dampingFraction": 0.8, "stiffness": 157.91, "damping": 20.11}, "bar.items": {"response": 0.3, "dampingFraction": 1.0, "stiffness": 438.65, "damping": 41.89}, "panel.open": {"response": 0.34, "dampingFraction": 0.8, "stiffness": 341.51, "damping": 29.57}, "panel.fade": {"response": 0.22, "dampingFraction": 1.0, "stiffness": 815.67, "damping": 57.12}, "switch.knob": {"response": 0.28, "dampingFraction": 0.78, "stiffness": 503.55, "damping": 35.01}, "slider.jump": {"response": 0.3, "dampingFraction": 1.0, "stiffness": 438.65, "damping": 41.89}, "viz.bar": {"response": 0.2, "dampingFraction": 0.55, "stiffness": 986.96, "damping": 34.56}, "highlight.slide": {"response": 0.25, "dampingFraction": 1.0, "stiffness": 631.65, "damping": 50.27}}, "tweens": {"island.content.out": {"ms": 120, "bezier": [0.4, 0.0, 1.0, 1.0]}, "panel.close": {"ms": 160, "bezier": [0.0, 0.0, 0.2, 1.0]}, "highlight.off": {"ms": 120, "bezier": [0, 0, 1, 1]}, "switch.track": {"ms": 180, "bezier": [0.2, 0.0, 0.0, 1.0]}, "tile.hover": {"ms": 90, "bezier": [0, 0, 1, 1]}}, "delays": {"content_in_after_shell_ms": 70, "shell_collapse_after_content_out_ms": 40, "content_stagger_ms": 20, "bar_items_return_stagger_ms": 25, "notify_hold_ms": 4000, "hover_open_dwell_ms": 400, "menu_tracking_switch_ms": 0}, "glyphs": {"bluetooth": "E702", "wifi-ghost": "E701", "wifi-0": "E701", "wifi-1": "E872", "wifi-2": "E873", "wifi-3": "E874", "wifi-4": "E701", "volume-mute": "E74F", "volume-0": "E992", "volume-1": "E993", "volume-2": "E994", "volume-3": "E995", "battery-0": "E850", "battery-1": "E851", "battery-2": "E852", "battery-3": "E853", "battery-4": "E854", "battery-5": "E855", "battery-6": "E856", "battery-7": "E857", "battery-8": "E858", "battery-9": "E859", "battery-10": "E83F", "battery-charging-0": "E85A", "battery-charging-1": "E85B", "battery-charging-2": "E85C", "battery-charging-3": "E85D", "battery-charging-4": "E85E", "battery-charging-5": "E85F", "battery-charging-6": "E860", "battery-charging-7": "E861", "battery-charging-8": "E862", "battery-charging-9": "E83E", "battery-charging-10": "EA93", "battery-saver-0": "E863", "windows-logo": "—", "keyboard": "E765", "brightness": "E706", "cloud": "E753", "focus": "E708", "airplane": "E709", "settings": "E713", "lock": "E72E", "checkmark": "E73E", "chevron-right": "E76C", "play": "E768", "pause": "E769", "previous": "E892", "next": "E893", "speakers": "E7F5", "headphone": "E7F6", "search": "E721", "calendar": "E787"}, "island": {"idle": {"w": 185, "h": 32, "rb": 10, "re": 8}, "music": {"w": 300, "h": 32, "rb": 10, "re": 8}, "notify": {"w": 380, "h": 104, "rb": 26, "re": 12}, "player": {"w": 520, "h": 190, "rb": 32, "re": 12}}};
+/* MacBar engine — пружины, иконки, бар, остров, панели. Без зависимостей. */
+(function () {
+  "use strict";
+  var MB = window.MacBar;
+  var SPEC = MB.SPEC;
+
+  /* ------------------------------------------------------------ utils */
+  function num(name) {
+    try {
+      var v = getComputedStyle(document.documentElement).getPropertyValue("--" + name);
+      var n = parseFloat(v);
+      if (!isNaN(n)) return n;
+    } catch (e) {}
+    return SPEC.px[name];
+  }
+  MB.num = num;
+  function el(tag, cls, html) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (html != null) e.innerHTML = html;
+    return e;
+  }
+  function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
+  MB.timeScale = 1;
+  function later(fn, ms) { return setTimeout(fn, ms * MB.timeScale); }
+
+  /* ------------------------------------------------------------ cubic-bezier */
+  function bezier(x1, y1, x2, y2) {
+    function a(p1, p2) { return 1 - 3 * p2 + 3 * p1; }
+    function b(p1, p2) { return 3 * p2 - 6 * p1; }
+    function c(p1) { return 3 * p1; }
+    function calc(t, p1, p2) { return ((a(p1, p2) * t + b(p1, p2)) * t + c(p1)) * t; }
+    function slope(t, p1, p2) { return 3 * a(p1, p2) * t * t + 2 * b(p1, p2) * t + c(p1); }
+    return function (x) {
+      if (x <= 0) return 0; if (x >= 1) return 1;
+      var t = x;
+      for (var i = 0; i < 8; i++) {
+        var s = slope(t, x1, x2); if (Math.abs(s) < 1e-6) break;
+        t -= (calc(t, x1, x2) - x) / s;
+      }
+      t = clamp(t, 0, 1);
+      return calc(t, y1, y2);
+    };
+  }
+
+  /* ------------------------------------------------------------ animated value */
+  var active = new Set(), frameFns = new Set(), raf = 0, last = 0;
+  function V(x) { this.x = x; this.v = 0; this.t = x; this.mode = "idle"; }
+  V.prototype.spring = function (target, name) {
+    var p = SPEC.springs[name];
+    this.k = p.stiffness; this.c = p.damping; this.t = target; this.mode = "spring"; this.sname = name;
+    wake(this); return this;
+  };
+  V.prototype.tween = function (target, name) {
+    var p = SPEC.tweens[name];
+    this.from = this.x; this.t = target; this.dur = p.ms / 1000; this.el = 0;
+    this.ease = bezier.apply(null, p.bezier); this.v = 0; this.mode = "tween";
+    wake(this); return this;
+  };
+  V.prototype.set = function (x) { this.x = this.t = x; this.v = 0; this.mode = "idle"; active.delete(this); requestFrame(); return this; };
+  V.prototype.step = function (dt) {
+    if (this.mode === "spring") {
+      var acc = -this.k * (this.x - this.t) - this.c * this.v;
+      this.v += acc * dt; this.x += this.v * dt;
+      if (Math.abs(this.x - this.t) < 0.004 && Math.abs(this.v) < 0.04) { this.x = this.t; this.v = 0; this.mode = "idle"; }
+    } else if (this.mode === "tween") {
+      this.el += dt;
+      var p = Math.min(1, this.el / this.dur);
+      this.x = this.from + (this.t - this.from) * this.ease(p);
+      if (p >= 1) { this.x = this.t; this.mode = "idle"; }
+    }
+  };
+  MB.V = V;
+  function wake(v) { active.add(v); requestFrame(); }
+  function requestFrame() { if (!raf) { last = performance.now(); raf = requestAnimationFrame(tick); } }
+  function tick(now) {
+    var dt = Math.min(0.05, (now - last) / 1000) / MB.timeScale; last = now;
+    var n = Math.max(1, Math.ceil(dt / 0.002)), h = dt / n;
+    active.forEach(function (v) {
+      for (var i = 0; i < n && v.mode !== "idle"; i++) v.step(h);
+      if (v.mode === "idle") active.delete(v);
+    });
+    frameFns.forEach(function (f) { f(); });
+    raf = active.size ? requestAnimationFrame(tick) : 0;
+  }
+  function onFrame(fn) { frameFns.add(fn); requestFrame(); return function () { frameFns.delete(fn); }; }
+  MB.onFrame = onFrame;
+
+  /* ------------------------------------------------------------ icons */
+  var fontMode = null;
+  function detectFont() {
+    if (fontMode !== null) return fontMode;
+    try {
+      var c = document.createElement("canvas").getContext("2d");
+      var w = function (f) { c.font = "32px " + f; return c.measureText("").width; };
+      var base = w("monospace");
+      if (Math.abs(w('"Segoe Fluent Icons", monospace') - base) > 0.5) fontMode = "fluent";
+      else if (Math.abs(w('"Segoe MDL2 Assets", monospace') - base) > 0.5) fontMode = "mdl2";
+      else fontMode = "svg";
+    } catch (e) { fontMode = "svg"; }
+    return fontMode;
+  }
+  MB.fontMode = detectFont;
+  var S = 'stroke="currentColor" fill="none" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"';
+  function svg(size, body, vb) {
+    return '<svg class="mb-svg" width="' + size + '" height="' + size + '" viewBox="' + (vb || "0 0 16 16") + '" aria-hidden="true">' + body + "</svg>";
+  }
+  function wifiSvg(level) {
+    var arcs = [
+      '<circle cx="8" cy="12.6" r="1.15" fill="currentColor" stroke="none"/>',
+      '<path d="M5.6 10.2a3.4 3.4 0 0 1 4.8 0" ' + S + "/>",
+      '<path d="M3.5 8.1a6.4 6.4 0 0 1 9 0" ' + S + "/>",
+      '<path d="M1.4 6a9.3 9.3 0 0 1 13.2 0" ' + S + "/>"
+    ];
+    var out = "";
+    for (var i = 0; i < 4; i++) out += '<g opacity="' + (i < level || (level === 4) ? 1 : 0.3) + '">' + arcs[i] + "</g>";
+    return out;
+  }
+  function volSvg(n) {
+    var b = '<path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" ' + S + "/>";
+    if (n === "mute") return b + '<path d="M10.5 6.2l3.6 3.6M14.1 6.2l-3.6 3.6" ' + S + "/>";
+    var w = ['<path d="M10 6.3a2.4 2.4 0 0 1 0 3.4" ' + S + "/>", '<path d="M11.7 4.8a4.5 4.5 0 0 1 0 6.4" ' + S + "/>", '<path d="M13.3 3.3a6.6 6.6 0 0 1 0 9.4" ' + S + "/>"];
+    var o = b; for (var i = 0; i < n; i++) o += w[i]; return o;
+  }
+  function batSvg(level, charging) {
+    var fillW = Math.max(0, Math.round(10.6 * level / 10 * 10) / 10);
+    var o = '<rect x="1.2" y="4.6" width="12.6" height="6.8" rx="1.8" ' + S + "/>" +
+      '<path d="M15 6.9v2.2" ' + S + "/>" +
+      '<rect x="2.2" y="5.6" width="' + fillW + '" height="4.8" rx="0.9" fill="currentColor"/>';
+    if (charging) o += '<path d="M8.4 3.6 6 8.3h2.6L7.4 12.4l3-5h-2.6z" fill="currentColor" stroke="var(--mb-bolt-stroke,#000)" stroke-width="0.7"/>';
+    return o;
+  }
+  var SVG = {
+    bluetooth: function () { return '<path d="M4.6 5.1 11 10.9 8 13.6V2.4l3 2.7-6.4 5.8" ' + S + "/>"; },
+    brightness: function () { return '<circle cx="8" cy="8" r="2.9" ' + S + '/><path d="M8 1.6v1.5M8 12.9v1.5M1.6 8h1.5M12.9 8h1.5M3.5 3.5l1 1M11.5 11.5l1 1M3.5 12.5l1-1M11.5 4.5l1-1" ' + S + "/>"; },
+    cloud: function () { return '<path d="M4.6 12.3h7a2.7 2.7 0 0 0 .3-5.4A3.9 3.9 0 0 0 4.4 6a3.2 3.2 0 0 0 .2 6.3z" ' + S + "/>"; },
+    focus: function () { return '<path d="M12.8 9.8A5.4 5.4 0 0 1 6.2 3.2a5.4 5.4 0 1 0 6.6 6.6z" ' + S + "/>"; },
+    settings: function () { return '<circle cx="8" cy="8" r="2.2" ' + S + '/><path d="M8 1.8v2M8 12.2v2M1.8 8h2M12.2 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M3.6 12.4 5 11M11 5l1.4-1.4" ' + S + "/>"; },
+    lock: function () { return '<rect x="3.6" y="7.2" width="8.8" height="6.4" rx="1.4" ' + S + '/><path d="M5.6 7.2V5.4a2.4 2.4 0 0 1 4.8 0v1.8" ' + S + "/>"; },
+    checkmark: function () { return '<path d="M3.4 8.4 6.6 11.4 12.8 4.8" ' + S + ' stroke-width="1.5"/>'; },
+    "chevron-right": function () { return '<path d="M6 3.5 10.5 8 6 12.5" ' + S + "/>"; },
+    play: function () { return '<path d="M4.6 2.8v10.4L13.2 8z" fill="currentColor"/>'; },
+    pause: function () { return '<rect x="4" y="3" width="2.8" height="10" rx="0.8" fill="currentColor"/><rect x="9.2" y="3" width="2.8" height="10" rx="0.8" fill="currentColor"/>'; },
+    previous: function () { return '<path d="M8 8 14 3.6v8.8zM2 8l6-4.4v8.8z" fill="currentColor"/><rect x="1" y="3.6" width="1.4" height="8.8" rx="0.5" fill="currentColor"/>'; },
+    next: function () { return '<path d="M8 8 2 3.6v8.8zM14 8 8 3.6v8.8z" fill="currentColor"/><rect x="13.6" y="3.6" width="1.4" height="8.8" rx="0.5" fill="currentColor"/>'; },
+    speakers: function () { return '<rect x="3.6" y="1.8" width="8.8" height="12.4" rx="1.6" ' + S + '/><circle cx="8" cy="9.8" r="2.2" ' + S + '/><circle cx="8" cy="4.8" r="0.8" fill="currentColor"/>'; },
+    headphone: function () { return '<path d="M2.6 11V8.4a5.4 5.4 0 0 1 10.8 0V11" ' + S + '/><rect x="2" y="9.6" width="3" height="4.4" rx="1.2" ' + S + '/><rect x="11" y="9.6" width="3" height="4.4" rx="1.2" ' + S + "/>"; },
+    keyboard: function () { return '<rect x="1.4" y="4" width="13.2" height="8" rx="1.5" ' + S + '/><path d="M4 6.6h.01M6.7 6.6h.01M9.3 6.6h.01M12 6.6h.01M5 9.4h6" ' + S + "/>"; },
+    mail: function () { return '<rect x="1.8" y="3.4" width="12.4" height="9.2" rx="1.6" ' + S + '/><path d="M2.4 4.4 8 8.8l5.6-4.4" ' + S + "/>"; },
+    search: function () { return '<circle cx="7" cy="7" r="4.2" ' + S + '/><path d="M10.2 10.2 14 14" ' + S + "/>"; },
+    airplane: function () { return '<path d="M8 1.8c.6 0 .9.6.9 1.4v3.3l5 2.7v1.4l-5-1.5v2.9l1.5 1.1v1.1L8 13.6l-2.4.6v-1.1l1.5-1.1V9.1l-5 1.5V9.2l5-2.7V3.2c0-.8.3-1.4.9-1.4z" fill="currentColor"/>'; },
+    mouse: function () { return '<rect x="4.2" y="1.8" width="7.6" height="12.4" rx="3.8" ' + S + '/><path d="M8 4.2v2.2" ' + S + "/>"; }
+  };
+  var FLUENT_EXTRA = { mail: "E715", mouse: "E962" };
+
+  /* icon(key, size): wifi-N, volume-N|mute, battery-N, battery-charging-N, windows-logo, + SVG keys */
+  MB.icon = function (key, size, cls) {
+    size = size || num("bar-icon");
+    var mode = detectFont();
+    var c = "mb-ic" + (cls ? " " + cls : "");
+    if (key === "windows-logo") {
+      var q = (size - 1) / 2;
+      return '<span class="' + c + '" style="width:' + size + "px;height:" + size + 'px">' +
+        svg(size, '<rect x="0" y="0" width="' + q + '" height="' + q + '" fill="currentColor"/><rect x="' + (q + 1) + '" y="0" width="' + q + '" height="' + q + '" fill="currentColor"/>' +
+          '<rect x="0" y="' + (q + 1) + '" width="' + q + '" height="' + q + '" fill="currentColor"/><rect x="' + (q + 1) + '" y="' + (q + 1) + '" width="' + q + '" height="' + q + '" fill="currentColor"/>', "0 0 " + size + " " + size) + "</span>";
+    }
+    var m;
+    if (mode !== "svg") {
+      var hex;
+      if ((m = /^wifi-(\d)$/.exec(key))) {
+        var L = +m[1];
+        var top = L === 0 ? "" : '<span class="mb-g">&#x' + SPEC.glyphs["wifi-" + L] + ";</span>";
+        return '<span class="' + c + ' mb-stack" style="font-size:' + size + 'px;width:' + size + "px;height:" + size + 'px"><span class="mb-g mb-ghost">&#xE701;</span>' + top + "</span>";
+      }
+      hex = SPEC.glyphs[key] || FLUENT_EXTRA[key];
+      if (hex && hex !== "—") return '<span class="' + c + '" style="font-size:' + size + "px;width:" + size + "px;height:" + size + 'px"><span class="mb-g">&#x' + hex + ";</span></span>";
+    }
+    var body = "";
+    if ((m = /^wifi-(\d)$/.exec(key))) body = wifiSvg(+m[1]);
+    else if (key === "volume-mute") body = volSvg("mute");
+    else if ((m = /^volume-(\d)$/.exec(key))) body = volSvg(+m[1]);
+    else if ((m = /^battery-charging-(\d+)$/.exec(key))) body = batSvg(+m[1], true);
+    else if ((m = /^battery-(\d+)$/.exec(key))) body = batSvg(+m[1], false);
+    else if (SVG[key]) body = SVG[key]();
+    return '<span class="' + c + '" style="width:' + size + "px;height:" + size + 'px">' + svg(size, body) + "</span>";
+  };
+  MB.batteryKey = function (pct, charging) {
+    var i = pct >= 95 ? 10 : pct < 5 ? 0 : Math.floor((pct - 5) / 10) + 1;
+    return (charging ? "battery-charging-" : "battery-") + i;
+  };
+  MB.volumeKey = function (v, muted) {
+    if (muted) return "volume-mute";
+    if (v <= 0) return "volume-0";
+    return v <= 0.33 ? "volume-1" : v <= 0.66 ? "volume-2" : "volume-3";
+  };
+
+  /* ------------------------------------------------------------ island shape path */
+  MB.islandPath = function (cx, W, H, rb, re, y0) {
+    var avail = H - y0;
+    if (avail <= 0.5 || W <= 1) return "";
+    var e = Math.max(0, Math.min(re, avail / 2));
+    var r = Math.max(0, Math.min(rb, W / 2, avail - e));
+    var L = cx - W / 2, R = cx + W / 2;
+    var d = "M" + (L - e) + " " + y0;
+    if (e > 0) d += " A" + e + " " + e + " 0 0 1 " + L + " " + (y0 + e); else d += " L" + L + " " + y0;
+    d += " L" + L + " " + (H - r);
+    if (r > 0) d += " A" + r + " " + r + " 0 0 0 " + (L + r) + " " + H;
+    d += " L" + (R - r) + " " + H;
+    if (r > 0) d += " A" + r + " " + r + " 0 0 0 " + R + " " + (H - r);
+    d += " L" + R + " " + (y0 + e);
+    if (e > 0) d += " A" + e + " " + e + " 0 0 1 " + (R + e) + " " + y0;
+    return d + " Z";
+  };
+
+  /* ------------------------------------------------------------ data */
+  MB.data = function () {
+    return {
+      app: "Проводник",
+      weather: { icon: "brightness", temp: "12°", city: "Бишкек" },
+      battery: 87, charging: false,
+      volume: 0.62, muted: false,
+      wifiOn: true, wifiLevel: 3,
+      btOn: true,
+      layout: "RU",
+      date: "Пт 6 нояб.",
+      track: { title: "Тёплый вечер", artist: "Lo‑Fi Bishkek", len: 243, pos: 84, playing: true },
+      notify: { app: "Почта", title: "Тимур", body: "Макет бара готов — глянь, когда будет минутка.", when: "сейчас" }
+    };
+  };
+
+  MB.menus = function (D) {
+    return {
+      win: { kind: "menu", rows: [
+        { t: "item", title: "Об этом компьютере" }, { t: "sep" },
+        { t: "item", title: "Параметры Windows…" }, { t: "item", title: "Microsoft Store…" }, { t: "sep" },
+        { t: "item", title: "Недавние объекты", sub: true }, { t: "sep" },
+        { t: "item", title: "Диспетчер задач…", key: "Ctrl+Shift+Esc" }, { t: "sep" },
+        { t: "item", title: "Сон" }, { t: "item", title: "Перезагрузить…" }, { t: "item", title: "Выключить…" }, { t: "sep" },
+        { t: "item", title: "Заблокировать экран", key: "Win+L" }, { t: "item", title: "Выйти из системы…" }] },
+      app: { kind: "menu", rows: [
+        { t: "item", title: "О программе «" + D.app + "»" }, { t: "sep" },
+        { t: "item", title: "Параметры…", key: "Ctrl+," }, { t: "sep" },
+        { t: "item", title: "Скрыть", key: "Win+D", disabled: true }, { t: "sep" },
+        { t: "item", title: "Закрыть", key: "Alt+F4" }] },
+      file: { kind: "menu", rows: [
+        { t: "item", title: "Новое окно", key: "Ctrl+N" }, { t: "item", title: "Новая папка", key: "Ctrl+Shift+N" },
+        { t: "item", title: "Открыть" }, { t: "item", title: "Открыть с помощью", sub: true }, { t: "sep" },
+        { t: "item", title: "Закрыть окно", key: "Ctrl+W" }] },
+      edit: { kind: "menu", rows: [
+        { t: "item", title: "Отменить", key: "Ctrl+Z" }, { t: "item", title: "Повторить", key: "Ctrl+Y", disabled: true }, { t: "sep" },
+        { t: "item", title: "Вырезать", key: "Ctrl+X" }, { t: "item", title: "Копировать", key: "Ctrl+C" },
+        { t: "item", title: "Вставить", key: "Ctrl+V" }, { t: "item", title: "Выделить всё", key: "Ctrl+A" }] },
+      view: { kind: "menu", rows: [
+        { t: "item", title: "Значки" }, { t: "item", title: "Список", check: true }, { t: "item", title: "Таблица" }, { t: "sep" },
+        { t: "item", title: "Показать скрытые файлы" }, { t: "item", title: "Показать расширения", check: true }] },
+      window: { kind: "menu", rows: [
+        { t: "item", title: "Свернуть", key: "Win+↓" }, { t: "item", title: "Развернуть", key: "Win+↑" }, { t: "sep" },
+        { t: "item", title: "Привязать слева", key: "Win+←" }, { t: "item", title: "Привязать справа", key: "Win+→" }] },
+      weather: { kind: "menu", rows: [
+        { t: "item", title: D.weather.city + " · " + D.weather.temp + ", ясно", disabled: true },
+        { t: "item", title: "Завтра: 9°, облачно", disabled: true }, { t: "sep" },
+        { t: "item", title: "Открыть прогноз…" }] },
+      bt: { kind: "panel", rows: [
+        { t: "header", title: "Bluetooth", toggle: "btOn" },
+        { t: "section", title: "Мои устройства" },
+        { t: "row", icon: "headphone", title: "WH‑1000XM4", caption: "Подключено · 80 %", on: true, group: "bt" },
+        { t: "row", icon: "mouse", title: "MX Master 3S", caption: "Подключено", on: true, group: "bt2" },
+        { t: "row", icon: "keyboard", title: "Keychron K2", group: "bt3" },
+        { t: "sep" }, { t: "link", title: "Настройки Bluetooth…" }] },
+      wifi: { kind: "panel", rows: [
+        { t: "header", title: "Wi‑Fi", toggle: "wifiOn" },
+        { t: "section", title: "Известная сеть" },
+        { t: "row", icon: "wifi-3", title: "Kesha‑5G", lock: true, on: true, group: "net" },
+        { t: "section", title: "Другие сети" },
+        { t: "row", icon: "wifi-2", title: "Beeline_2.4", lock: true, group: "net" },
+        { t: "row", icon: "wifi-1", title: "Cafe Free", group: "net" },
+        { t: "row", icon: "wifi-1", title: "TP‑Link_4C1A", lock: true, group: "net" },
+        { t: "sep" }, { t: "link", title: "Настройки Wi‑Fi…" }] },
+      vol: { kind: "panel", rows: [
+        { t: "header", title: "Звук" },
+        { t: "slider", key: "volume" },
+        { t: "section", title: "Выход" },
+        { t: "row", icon: "speakers", title: "Динамики EliteBook", on: true, group: "out", check: true },
+        { t: "row", icon: "headphone", title: "WH‑1000XM4", group: "out", check: true },
+        { t: "sep" }, { t: "link", title: "Настройки звука…" }] },
+      battery: { kind: "panel", rows: [
+        { t: "header", title: "Батарея", value: "battery" },
+        { t: "caption", text: "Источник питания: аккумулятор" },
+        { t: "sep" },
+        { t: "section", title: "Значительное энергопотребление" },
+        { t: "row", icon: "search", title: "Chrome", plain: true },
+        { t: "row", icon: "settings", title: "Code", plain: true },
+        { t: "sep" }, { t: "link", title: "Настройки батареи…" }] },
+      layout: { kind: "menu", rows: [
+        { t: "item", title: "Русская", radio: "RU" }, { t: "item", title: "English (US)", radio: "EN" }, { t: "sep" },
+        { t: "item", title: "Показать экранную клавиатуру" }, { t: "item", title: "Настройки клавиатуры…" }] },
+      date: { kind: "menu", rows: [
+        { t: "item", title: "Пятница, 6 ноября 2026", disabled: true }, { t: "sep" },
+        { t: "item", title: "Открыть календарь…" }, { t: "item", title: "Настройки даты и времени…" }] }
+    };
+  };
+
+  /* ------------------------------------------------------------ panel / menu renderer */
+  function Switch(on, onChange) {
+    var w = num("switch-w"), h = num("switch-h");
+    var root = el("button", "mb-switch" + (on ? " is-on" : ""));
+    root.setAttribute("role", "switch"); root.setAttribute("aria-checked", on);
+    var knob = el("span", "mb-knob"); root.appendChild(knob);
+    var travel = w - h; // 14
+    var x = new V(on ? travel : 0);
+    var stop = onFrame(function () { knob.style.transform = "translateX(" + x.x + "px)"; });
+    knob.style.transform = "translateX(" + x.x + "px)";
+    root.addEventListener("click", function (ev) {
+      ev.stopPropagation(); on = !on;
+      root.classList.toggle("is-on", on); root.setAttribute("aria-checked", on);
+      x.spring(on ? travel : 0, "switch.knob");
+      if (onChange) onChange(on);
+    });
+    root._dispose = stop;
+    return root;
+  }
+  MB.Switch = Switch;
+
+  function Slider(value, onChange) {
+    var root = el("div", "mb-slider");
+    var fill = el("div", "mb-slider-fill");
+    var glyph = el("div", "mb-slider-glyph");
+    root.appendChild(fill); root.appendChild(glyph);
+    var h = num("slider-h");
+    var v = new V(value);
+    function paint() {
+      var W = root.clientWidth || 268;
+      var fw = h + (W - h) * clamp(v.x, 0, 1);
+      fill.style.width = fw + "px";
+      glyph.innerHTML = MB.icon(MB.volumeKey(v.t, false), num("slider-glyph-size"));
+    }
+    var stop = onFrame(paint);
+    function at(ev) { var r = root.getBoundingClientRect(); return clamp((ev.clientX - r.left - h / 2) / (r.width - h), 0, 1); }
+    var drag = false;
+    root.addEventListener("pointerdown", function (ev) {
+      ev.stopPropagation(); drag = true; root.setPointerCapture(ev.pointerId);
+      v.spring(at(ev), "slider.jump"); onChange && onChange(v.t);
+    });
+    root.addEventListener("pointermove", function (ev) { if (!drag) return; v.set(at(ev)); paint(); onChange && onChange(v.x); });
+    root.addEventListener("pointerup", function () { drag = false; });
+    setTimeout(paint, 0);
+    root._dispose = stop;
+    return root;
+  }
+  MB.Slider = Slider;
+
+  MB.renderPanel = function (def, D, hooks) {
+    hooks = hooks || {};
+    var isMenu = def.kind === "menu";
+    var p = el("div", isMenu ? "mb-menu" : "mb-panel");
+    p.addEventListener("pointerdown", function (e) { e.stopPropagation(); });
+    var body = el("div", isMenu ? "mb-menu-body" : "mb-panel-body"); p.appendChild(body);
+    var disposers = [];
+    var rows = [];
+    def.rows.forEach(function (r) {
+      var n;
+      if (r.t === "sep") { n = el("div", isMenu ? "mb-sep mb-sep-menu" : "mb-sep"); }
+      else if (r.t === "section") { n = el("div", "mb-section panel-section", r.title); }
+      else if (r.t === "caption") { n = el("div", "mb-caption panel-caption", r.text); }
+      else if (r.t === "header") {
+        n = el("div", "mb-header");
+        n.appendChild(el("div", "mb-header-title panel-title", r.title));
+        if (r.toggle) {
+          var sw = Switch(!!D[r.toggle], function (on) { D[r.toggle] = on; body.classList.toggle("is-off", !on); hooks.change && hooks.change(); });
+          disposers.push(sw._dispose); n.appendChild(sw);
+          if (!D[r.toggle]) body.classList.add("is-off");
+        }
+        if (r.value === "battery") n.appendChild(el("div", "mb-header-value panel-row", D.battery + " %"));
+      }
+      else if (r.t === "slider") {
+        n = el("div", "mb-slider-row");
+        var s = Slider(D.volume, function (val) { D.volume = val; D.muted = val <= 0; hooks.change && hooks.change(); });
+        disposers.push(s._dispose); n.appendChild(s);
+      }
+      else if (r.t === "row") {
+        n = el("div", "mb-row" + (r.on ? " is-on" : "") + (r.plain ? " is-plain" : ""));
+        n.dataset.group = r.group || "";
+        n.innerHTML = '<span class="mb-row-circle">' + MB.icon(r.icon, num("row-glyph")) + "</span>" +
+          '<span class="mb-row-text"><span class="mb-row-title panel-row">' + r.title + "</span>" +
+          (r.caption ? '<span class="mb-row-cap panel-caption">' + r.caption + "</span>" : "") + "</span>" +
+          (r.lock ? '<span class="mb-row-trail">' + MB.icon("lock", 12) + "</span>" : "") +
+          (r.check ? '<span class="mb-row-trail mb-row-check">' + MB.icon("checkmark", 12) + "</span>" : "");
+        n.addEventListener("click", function () {
+          if (r.plain) return;
+          if (r.group === "net" || r.group === "out") {
+            rows.forEach(function (o) { if (o.dataset.group === r.group) o.classList.remove("is-on"); });
+            n.classList.add("is-on");
+          } else n.classList.toggle("is-on");
+        });
+        rows.push(n);
+      }
+      else if (r.t === "link") { n = el("div", "mb-link panel-row", r.title); n.addEventListener("click", function () { hooks.close && hooks.close(); }); }
+      else if (r.t === "item") {
+        var checked = r.check || (r.radio && D.layout === r.radio);
+        n = el("div", "mb-mi panel-row" + (r.disabled ? " is-disabled" : ""));
+        n.innerHTML = '<span class="mb-mi-check">' + (checked ? MB.icon("checkmark", 11) : "") + "</span>" +
+          '<span class="mb-mi-title">' + r.title + "</span>" +
+          (r.key ? '<span class="mb-mi-key">' + r.key + "</span>" : "") +
+          (r.sub ? '<span class="mb-mi-key">' + MB.icon("chevron-right", 11) + "</span>" : "");
+        if (!r.disabled) n.addEventListener("click", function () {
+          if (r.radio) { D.layout = r.radio; hooks.change && hooks.change(); }
+          // macOS: подсвеченный пункт мигает перед закрытием
+          n.classList.add("is-blink");
+          later(function () { n.classList.remove("is-blink"); later(function () { hooks.close && hooks.close(); }, 60); }, 70);
+        });
+      }
+      if (n) {
+        if (/^(row|link|item)$/.test(r.t) && !r.disabled) {
+          n.addEventListener("pointerdown", function () { n.classList.add("is-press"); });
+          n.addEventListener("pointerup", function () { n.classList.remove("is-press"); });
+          n.addEventListener("pointerleave", function () { n.classList.remove("is-press"); });
+        }
+        body.appendChild(n);
+      }
+    });
+    p._dispose = function () { disposers.forEach(function (d) { d && d(); }); };
+    return p;
+  };
+
+  /* ------------------------------------------------------------ desktop: bar + island + panels */
+  MB.ISLAND = SPEC.island;
+
+  MB.Desktop = function (host, opts) {
+    opts = opts || {};
+    var D = opts.data || MB.data();
+    var MENUS = MB.menus(D);
+    var screen = el("div", "mb-screen" + (opts.wallpaper === false ? "" : " has-wall"));
+    screen.dataset.mode = opts.mode || "solid";
+    screen.style.width = (opts.width || 1000) + "px";
+    screen.style.height = (opts.height || 560) + "px";
+    host.appendChild(screen);
+
+    var bar = el("div", "mb-bar"); screen.appendChild(bar);
+    var left = el("div", "mb-bar-left"), right = el("div", "mb-bar-right");
+    bar.appendChild(left); bar.appendChild(right);
+    var hl = el("div", "mb-hl"); bar.insertBefore(hl, left);
+
+    var items = [];
+    function addItem(group, id, cls, html, label) {
+      var it = el("div", "mb-item " + cls, html);
+      it.dataset.id = id; it.setAttribute("role", "menuitem"); it.setAttribute("aria-label", label || id);
+      it.tabIndex = -1;
+      group.appendChild(it);
+      items.push({ id: id, node: it, side: group === left ? -1 : 1, o: new V(1), dx: new V(0), hidden: false });
+      return it;
+    }
+    var minimal = opts.items === "minimal";
+    addItem(left, "win", "mb-item-logo", MB.icon("windows-logo", num("bar-logo")), "Windows");
+    addItem(left, "app", "mb-item-text bar-app", D.app);
+    if (!minimal) {
+      addItem(left, "file", "mb-item-text bar-menu", "Файл");
+      addItem(left, "edit", "mb-item-text bar-menu", "Правка");
+      addItem(left, "view", "mb-item-text bar-menu", "Вид");
+      if (opts.items === "full") addItem(left, "window", "mb-item-text bar-menu", "Окно");
+    }
+    var wItem = addItem(left, "weather", "mb-item-text mb-item-weather bar-menu", "");
+    var btItem = addItem(right, "bt", "mb-item-status", "", "Bluetooth");
+    var wifiItem = addItem(right, "wifi", "mb-item-status", "", "Wi‑Fi");
+    var volItem = addItem(right, "vol", "mb-item-status", "", "Звук");
+    var batItem = addItem(right, "battery", "mb-item-text mb-item-battery bar-menu", "", "Батарея");
+    var layItem = addItem(right, "layout", "mb-item-status mb-item-layout", "", "Раскладка");
+    var dateItem = addItem(right, "date", "mb-item-text bar-menu mb-tnum", D.date, "Дата");
+
+    function paintStatus() {
+      wItem.innerHTML = MB.icon(D.weather.icon, num("bar-icon")) + '<span class="mb-gap"></span><span class="mb-dim">' + D.weather.temp + "</span>";
+      btItem.innerHTML = MB.icon("bluetooth", num("bar-icon"));
+      btItem.classList.toggle("is-dim", !D.btOn);
+      wifiItem.innerHTML = MB.icon("wifi-" + (D.wifiOn ? D.wifiLevel + 1 : 0), num("bar-icon"));
+      volItem.innerHTML = MB.icon(MB.volumeKey(D.volume, D.muted), num("bar-icon"));
+      batItem.innerHTML = '<span class="mb-tnum' + (D.battery <= 10 && !D.charging ? " mb-red" : "") + '">' + D.battery + "%</span><span class=\"mb-gap\"></span>" +
+        MB.icon(MB.batteryKey(D.battery, D.charging), num("bar-battery-glyph"), D.charging ? "mb-charging" : "");
+      layItem.innerHTML = '<span class="mb-layout-box bar-layout">' + D.layout + "</span>";
+      dateItem.textContent = D.date;
+      measure();
+    }
+
+    /* ---- island */
+    var isl = el("div", "mb-island"); screen.appendChild(isl);
+    var svgNS = "http://www.w3.org/2000/svg";
+    var shapeSvg = document.createElementNS(svgNS, "svg"); shapeSvg.setAttribute("class", "mb-island-shape");
+    var shape = document.createElementNS(svgNS, "path"); shapeSvg.appendChild(shape); isl.appendChild(shapeSvg);
+    var clip = el("div", "mb-island-clip"); isl.appendChild(clip);
+    var timeEl = el("div", "mb-i-time island-time mb-tnum"); clip.appendChild(timeEl);
+    var art = el("div", "mb-i-art"); clip.appendChild(art);
+    var viz = el("div", "mb-i-viz"); clip.appendChild(viz);
+    var vbars = [];
+    for (var i = 0; i < 4; i++) { var b = el("span"); viz.appendChild(b); vbars.push({ n: b, h: new V(num("viz-min-h")) }); }
+    var dot = el("div", "mb-i-dot"); clip.appendChild(dot);
+
+    var notifyL = el("div", "mb-i-layer mb-i-notify");
+    notifyL.innerHTML = '<div class="mb-n-icon">' + MB.icon("mail", 18) + '</div><div class="mb-n-text"><div class="mb-n-head"><span class="island-notify-title"></span><span class="mb-n-when island-meta"></span></div><div class="mb-n-body island-notify-body"></div></div>';
+    clip.appendChild(notifyL);
+    var playerL = el("div", "mb-i-layer mb-i-player");
+    playerL.innerHTML = '<div class="mb-p-text"><div class="mb-p-title island-title"></div><div class="mb-p-artist island-sub"></div></div>' +
+      '<div class="mb-p-prog"><div class="mb-p-track"><div class="mb-p-fill"></div></div><div class="mb-p-times island-meta mb-tnum"><span class="mb-p-cur"></span><span class="mb-p-rem"></span></div></div>' +
+      '<div class="mb-p-ctrl"><button class="mb-p-btn" data-a="prev"></button><button class="mb-p-btn mb-p-play" data-a="play"></button><button class="mb-p-btn" data-a="next"></button></div>';
+    clip.appendChild(playerL);
+    var pParts = [playerL.querySelector(".mb-p-text"), playerL.querySelector(".mb-p-prog"), playerL.querySelector(".mb-p-ctrl")];
+    var pPartV = pParts.map(function () { return { o: new V(1), y: new V(0) }; });
+
+    var st = SPEC.island;
+    var state = opts.state || "idle", prevState = "idle";
+    var shell = { w: new V(st[state].w), h: new V(st[state].h), rb: new V(st[state].rb), re: new V(st[state].re) };
+    var layers = {
+      music: { o: new V(state === "music" || state === "player" ? 1 : 0) },
+      notify: { o: new V(state === "notify" ? 1 : 0), y: new V(0) },
+      player: { o: new V(state === "player" ? 1 : 0), y: new V(0) },
+      time: { o: new V(state === "player" ? 0 : 1) }
+    };
+    function artTarget(s) {
+      var S2 = st[s === "player" ? "player" : "music"];
+      if (s === "player") return { x: -S2.w / 2 + num("island-pad"), y: num("bar-height") + num("island-body-top"), size: num("art-player"), r: num("radius-art-player") };
+      return { x: -S2.w / 2 + num("island-compact-inset"), y: (num("bar-height") - num("art-compact")) / 2, size: num("art-compact"), r: num("radius-art-compact") };
+    }
+    function vizTarget(s) {
+      var S2 = st[s === "player" ? "player" : "music"];
+      var vw = 4 * num("viz-bar-w") + 3 * num("viz-gap");
+      if (s === "player") return { x: S2.w / 2 - num("island-pad") - vw, y: num("bar-height") + num("island-body-top") + 10, max: 18 };
+      return { x: S2.w / 2 - num("island-compact-inset") - vw - 4, y: num("bar-height") / 2, max: num("viz-max-h") };
+    }
+    var a0 = artTarget(state), z0 = vizTarget(state);
+    var artV = { x: new V(a0.x), y: new V(a0.y), s: new V(a0.size), r: new V(a0.r) };
+    var vizV = { x: new V(z0.x), y: new V(z0.y), max: new V(z0.max) };
+
+    function centerX() { return screen.clientWidth / 2; }
+
+    function render() {
+      var barH = num("bar-height");
+      var y0 = screen.dataset.mode === "glass" ? 0 : barH;
+      var W = shell.w.x, H = shell.h.x, cx = centerX();
+      shapeSvg.setAttribute("width", screen.clientWidth); shapeSvg.setAttribute("height", Math.max(H, barH) + 40);
+      shape.setAttribute("d", screen.dataset.mode === "glass"
+        ? MB.islandPath(cx, W, H, shell.rb.x, shell.re.x, 0)
+        : MB.islandPath(cx, W, H, shell.rb.x, shell.re.x, y0));
+      isl.classList.toggle("is-below", H > barH + 1);
+      clip.style.left = (cx - W / 2) + "px"; clip.style.width = W + "px"; clip.style.height = H + "px";
+      clip.style.borderRadius = "0 0 " + Math.min(shell.rb.x, W / 2) + "px " + Math.min(shell.rb.x, W / 2) + "px";
+      var mid = W / 2;
+      timeEl.style.opacity = layers.time.o.x;
+      art.style.opacity = viz.style.opacity = layers.music.o.x;
+      art.style.left = (mid + artV.x.x) + "px"; art.style.top = artV.y.x + "px";
+      art.style.width = art.style.height = artV.s.x + "px"; art.style.borderRadius = artV.r.x + "px";
+      viz.style.left = (mid + vizV.x.x) + "px"; viz.style.top = vizV.y.x + "px";
+      var vmax = vizV.max.x;
+      vbars.forEach(function (b) { b.n.style.height = clamp(b.h.x, 2, vmax + 3) * (vmax / num("viz-max-h")) + "px"; });
+      notifyL.style.left = (mid - st.notify.w / 2) + "px";
+      playerL.style.left = (mid - st.player.w / 2) + "px";
+      notifyL.style.opacity = layers.notify.o.x; notifyL.style.transform = "translateY(" + layers.notify.y.x + "px) scale(" + (0.96 + 0.04 * layers.notify.o.x) + ")";
+      playerL.style.opacity = layers.player.o.x;
+      pParts.forEach(function (n, i) {
+        var pv = pPartV[i];
+        n.style.opacity = pv.o.x; n.style.transform = "translateY(" + pv.y.x + "px)";
+        n.style.filter = pv.o.x < 0.99 ? "blur(" + (1 - pv.o.x) * 4 + "px)" : "";
+      });
+      notifyL.style.filter = layers.notify.o.x < 0.99 ? "blur(" + (1 - layers.notify.o.x) * 4 + "px)" : "";
+      notifyL.style.pointerEvents = state === "notify" ? "auto" : "none";
+      playerL.style.pointerEvents = state === "player" ? "auto" : "none";
+      collide(cx - W / 2, cx + W / 2);
+      items.forEach(function (it) {
+        it.node.style.opacity = it.o.x;
+        it.node.style.transform = "translateX(" + it.dx.x + "px) scale(" + (0.9 + 0.1 * it.o.x) + ")";
+      });
+      if (hlState.on || hlO.x > 0) {
+        hl.style.opacity = hlO.x; hl.style.left = hlX.x + "px"; hl.style.width = hlW.x + "px";
+      }
+      if (openPanel) placePanel();
+      if (opts.onRender) opts.onRender(api);
+    }
+
+    /* ---- bar item collisions */
+    function measure() {
+      var sr = screen.getBoundingClientRect();
+      items.forEach(function (it) {
+        var prev = it.node.style.transform; it.node.style.transform = "none";
+        var r = it.node.getBoundingClientRect();
+        it.l = r.left - sr.left; it.r = r.right - sr.left;
+        it.node.style.transform = prev;
+      });
+    }
+    function collide(L, R) {
+      var gap = num("island-side-gap");
+      // остров выше бара не влияет; в покое ширина = вырез
+      items.forEach(function (it) {
+        var hide = it.r > L - gap && it.l < R + gap;
+        if (hide !== it.hidden) {
+          it.hidden = hide;
+          var delay = hide ? 0 : SPEC.delays.bar_items_return_stagger_ms * Math.max(0, Math.round(Math.abs((it.side < 0 ? it.r - L : R - it.l)) / 40));
+          (function (it, hide) {
+            later(function () {
+              it.o.spring(hide ? 0 : 1, "bar.items");
+              it.dx.spring(hide ? 6 * it.side : 0, "bar.items");
+            }, hide ? 0 : Math.min(delay, 100));
+          })(it, hide);
+          it.node.style.pointerEvents = hide ? "none" : "";
+        }
+      });
+    }
+
+    /* ---- island state machine */
+    var timers = [];
+    function clearTimers() { timers.forEach(clearTimeout); timers = []; }
+    function T(fn, ms) { timers.push(later(fn, ms)); }
+    function area(s) { return st[s].w * st[s].h; }
+    function setState(next, instant) {
+      if (next === state && !instant) return;
+      clearTimers();
+      var from = state; state = next;
+      if (next !== "notify") prevState = next;
+      var grow = area(next) >= area(from);
+      var S2 = st[next];
+      var shellGo = function () {
+        var spr = grow ? "island.expand" : "island.collapse";
+        shell.w.spring(S2.w, spr);
+        shell.h.spring(S2.h, next === "notify" && grow ? "island.drop" : spr);
+        shell.rb.spring(S2.rb, spr); shell.re.spring(S2.re, spr);
+        var at = artTarget(next), vt = vizTarget(next);
+        var as = grow ? "island.art" : "island.collapse";
+        artV.x.spring(at.x, as); artV.y.spring(at.y, as); artV.s.spring(at.size, as); artV.r.spring(at.r, as);
+        vizV.x.spring(vt.x, as); vizV.y.spring(vt.y, as); vizV.max.spring(vt.max, as);
+      };
+      // 1) уход контента (tween 120 мс)
+      var music = next === "music" || next === "player";
+      if (from === "notify" && next !== "notify") { layers.notify.o.tween(0, "island.content.out"); }
+      if (from === "player" && next !== "player") { layers.player.o.tween(0, "island.content.out"); }
+      if (!music && layers.music.o.t > 0) layers.music.o.tween(0, "island.content.out");
+      if (next === "player") layers.time.o.tween(0, "island.content.out");
+      if (instant) {
+        ["w", "h", "rb", "re"].forEach(function (k) { shell[k].set(S2[k]); });
+        var at = artTarget(next), vt = vizTarget(next);
+        artV.x.set(at.x); artV.y.set(at.y); artV.s.set(at.size); artV.r.set(at.r);
+        vizV.x.set(vt.x); vizV.y.set(vt.y); vizV.max.set(vt.max);
+        layers.music.o.set(music ? 1 : 0); layers.notify.o.set(next === "notify" ? 1 : 0);
+        layers.player.o.set(next === "player" ? 1 : 0); layers.time.o.set(next === "player" ? 0 : 1);
+        layers.notify.y.set(0); layers.player.y.set(0);
+        pPartV.forEach(function (pv) { pv.o.set(next === "player" ? 1 : 0); pv.y.set(0); });
+        render(); return;
+      }
+      // 2) оболочка: при росте — сразу, при сжатии — после ухода контента + 40 мс
+      if (grow) shellGo(); else T(shellGo, SPEC.tweens["island.content.out"].ms + SPEC.delays.shell_collapse_after_content_out_ms);
+      // 3) приход контента
+      var inDelay = grow ? SPEC.delays.content_in_after_shell_ms : SPEC.tweens["island.content.out"].ms + SPEC.delays.shell_collapse_after_content_out_ms;
+      T(function () {
+        if (music) layers.music.o.spring(1, "island.content");
+        if (next !== "player") layers.time.o.spring(1, "island.content");
+        if (next === "notify") { layers.notify.y.set(-6); layers.notify.o.spring(1, "island.content"); layers.notify.y.spring(0, "island.content"); }
+        if (next === "player") {
+          layers.player.o.set(1);
+          pPartV.forEach(function (pv, i) {
+            pv.o.set(0); pv.y.set(6);
+            T(function () { pv.o.spring(1, "island.content"); pv.y.spring(0, "island.content"); }, i * SPEC.delays.content_stagger_ms);
+          });
+        }
+      }, inDelay);
+      if (next === "notify" && !opts.static) T(function () { if (!hoverIsland) setState(prevState === "notify" ? "idle" : prevState); else pendingDismiss = true; }, SPEC.delays.notify_hold_ms);
+      if (opts.onState) opts.onState(next, from);
+    }
+    var hoverIsland = false, pendingDismiss = false;
+    clip.addEventListener("pointerenter", function () { hoverIsland = true; });
+    clip.addEventListener("pointerleave", function () {
+      hoverIsland = false;
+      if (pendingDismiss && state === "notify") { pendingDismiss = false; setState(prevState); }
+    });
+    clip.addEventListener("click", function (ev) {
+      var btn = ev.target.closest(".mb-p-btn");
+      if (btn) {
+        var a = btn.dataset.a;
+        if (a === "play") { D.track.playing = !D.track.playing; paintPlayer(); }
+        if (a === "next" || a === "prev") { D.track.pos = 0; paintPlayer(); }
+        return;
+      }
+      if (opts.static) return;
+      if (state === "music") setState("player");
+      else if (state === "player") setState("music");
+      else if (state === "notify") setState(prevState === "notify" ? "idle" : prevState);
+    });
+
+    function paintPlayer() {
+      var t = D.track;
+      playerL.querySelector(".mb-p-title").textContent = t.title;
+      playerL.querySelector(".mb-p-artist").textContent = t.artist;
+      var fmt = function (s) { s = Math.max(0, Math.round(s)); return Math.floor(s / 60) + ":" + ("0" + (s % 60)).slice(-2); };
+      playerL.querySelector(".mb-p-cur").textContent = fmt(t.pos);
+      playerL.querySelector(".mb-p-rem").textContent = "−" + fmt(t.len - t.pos);
+      playerL.querySelector(".mb-p-fill").style.width = (t.pos / t.len * 100) + "%";
+      var btns = playerL.querySelectorAll(".mb-p-btn");
+      btns[0].innerHTML = MB.icon("previous", 20);
+      btns[1].innerHTML = MB.icon(t.playing ? "pause" : "play", 26);
+      btns[2].innerHTML = MB.icon("next", 20);
+      viz.classList.toggle("is-paused", !t.playing);
+    }
+    function paintNotify() {
+      var n = D.notify;
+      notifyL.querySelector(".island-notify-title").textContent = n.title;
+      notifyL.querySelector(".mb-n-when").textContent = n.when;
+      notifyL.querySelector(".mb-n-body").textContent = n.body;
+    }
+    function clock() {
+      var d = new Date();
+      timeEl.textContent = d.getHours() + ":" + ("0" + d.getMinutes()).slice(-2);
+    }
+
+    /* ---- visualizer */
+    var vizTimer = setInterval(function () {
+      if (!D.track.playing || layers.music.o.t === 0) {
+        vbars.forEach(function (b) { b.h.spring(num("viz-min-h"), "viz.bar"); }); return;
+      }
+      vbars.forEach(function (b, i) {
+        var max = num("viz-max-h"), min = num("viz-min-h");
+        b.h.spring(min + Math.random() * (max - min) * (i === 1 || i === 2 ? 1 : 0.75), "viz.bar");
+      });
+    }, 150);
+    var progTimer = setInterval(function () {
+      if (D.track.playing) { D.track.pos = (D.track.pos + 1) % D.track.len; paintPlayer(); }
+      clock();
+    }, 1000);
+
+    /* ---- panels & menu tracking */
+    var layer = el("div", "mb-panel-layer"); screen.appendChild(layer);
+    var openId = null, openPanel = null, openItem = null;
+    var hlX = new V(0), hlW = new V(0), hlO = new V(0), hlState = { on: false };
+    var pOpen = new V(1), pFade = new V(1);
+    function itemOf(id) { for (var i = 0; i < items.length; i++) if (items[i].id === id) return items[i]; }
+    function placePanel() {
+      if (!openPanel) return;
+      var it = itemOf(openId);
+      var w = openPanel.offsetWidth, W = screen.clientWidth, m = num("panel-margin");
+      var x = clamp(it.l, m, W - w - m);
+      openPanel.style.left = x + "px";
+      openPanel.style.top = (num("bar-height") + num("panel-gap")) + "px";
+      var ox = clamp((it.l + it.r) / 2 - x, 0, w);
+      openPanel.style.transformOrigin = ox + "px 0px";
+      var s = 0.94 + 0.06 * pOpen.x;
+      openPanel.style.transform = "translateY(" + (-6 * (1 - pOpen.x)) + "px) scale(" + s + ")";
+      openPanel.style.opacity = pFade.x;
+    }
+    function open(id, viaTracking) {
+      if (openId === id) return;
+      var it = itemOf(id); if (!it || !MENUS[id]) return;
+      var animate = !openPanel || !viaTracking;
+      removePanel(true);
+      openId = id; openItem = it;
+      it.node.classList.add("is-active");
+      // плашка подсветки: мгновенно (как macOS) или ОПЦИЯ slide
+      var slide = viaTracking && (opts.trackingMode === "slide");
+      var bx = it.l, bw = it.r - it.l;
+      if (slide) { hlX.spring(bx, "highlight.slide"); hlW.spring(bw, "highlight.slide"); }
+      else { hlX.set(bx); hlW.set(bw); }
+      hlO.set(1); hlState.on = true;
+      var p = MB.renderPanel(MENUS[id], D, { change: paintStatus, close: close });
+      layer.appendChild(p); openPanel = p;
+      if (viaTracking) { pOpen.set(1); pFade.set(1); }
+      else if (animate) { pOpen.set(0); pFade.set(0); pOpen.spring(1, "panel.open"); pFade.spring(1, "panel.fade"); }
+      placePanel(); render();
+    }
+    function removePanel(instant) {
+      if (!openPanel) return;
+      var p = openPanel; openPanel = null;
+      if (openItem) openItem.node.classList.remove("is-active");
+      p._dispose && p._dispose();
+      if (instant) { p.remove(); return; }
+      // panel.close: tween 160 мс
+      var o = new V(pFade.x), s = new V(1);
+      o.tween(0, "panel.close"); s.tween(0.98, "panel.close");
+      var stop = onFrame(function () {
+        p.style.opacity = o.x;
+        p.style.transform = "scale(" + s.x + ")";
+        if (o.mode === "idle") { stop(); p.remove(); }
+      });
+    }
+    function close() {
+      if (!openId) return;
+      removePanel(false);
+      openId = null; hlState.on = false;
+      hlO.tween(0, "highlight.off");
+      requestFrame();
+    }
+    items.forEach(function (it) {
+      it.node.addEventListener("pointerdown", function (ev) {
+        ev.stopPropagation();
+        if (openId === it.id) close(); else open(it.id, false);
+      });
+      it.node.addEventListener("pointerenter", function () {
+        if (openId && openId !== it.id && MENUS[it.id]) open(it.id, true); // menu tracking
+      });
+    });
+    screen.addEventListener("pointerdown", function () { close(); if (state === "player" && !opts.static) setState("music"); });
+    var keyH = function (ev) {
+      if (!screen.isConnected) return;
+      if (ev.key === "Escape") close();
+      if (openId && (ev.key === "ArrowRight" || ev.key === "ArrowLeft")) {
+        var ids = items.filter(function (i) { return MENUS[i.id] && !i.hidden; }).map(function (i) { return i.id; });
+        var k = ids.indexOf(openId) + (ev.key === "ArrowRight" ? 1 : -1);
+        if (k >= 0 && k < ids.length) open(ids[k], true);
+      }
+    };
+    document.addEventListener("keydown", keyH);
+
+    /* ---- init */
+    paintStatus(); paintPlayer(); paintNotify(); clock();
+    onFrame(render);
+    requestAnimationFrame(function () { measure(); render(); });
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { measure(); render(); });
+
+    var api = {
+      screen: screen, data: D,
+      get state() { return state; },
+      setState: setState,
+      notify: function () { if (state === "player") setState("music"); setTimeout(function () { setState("notify"); }, state === "player" ? 200 : 0); },
+      setMode: function (m) { screen.dataset.mode = m; render(); },
+      setTracking: function (m) { opts.trackingMode = m; },
+      open: function (id) { open(id, false); }, close: close,
+      refresh: function () { paintStatus(); paintPlayer(); render(); },
+      shell: shell
+    };
+    return api;
+  };
+})();
+</script><meta charset="utf-8"><title>MacBar — прототип</title></head>
+<body>
+<div id="root" class="mb-page"></div>
+<script>
+(function () {
+  var MB = window.MacBar, root = document.getElementById("root");
+  var host = document.createElement("div"); root.appendChild(host);
+  var readout = document.createElement("div");
+  var desk = MB.Desktop(host, { width: 1000, height: 560, state: "idle", onState: function (s, f) { show(s, f); syncIsland(); } });
+
+  function show(s, f) {
+    var name = s === "notify" ? "island.expand + island.drop" : (MB.ISLAND[s].w * MB.ISLAND[s].h >= MB.ISLAND[f].w * MB.ISLAND[f].h ? "island.expand" : "island.collapse");
+    var p = MB.SPEC.springs[name.split(" ")[0]];
+    readout.textContent = f + " → " + s + " · " + name + " · response " + p.response.toFixed(2) + " с · ζ " + p.dampingFraction.toFixed(2) +
+      " · k " + p.stiffness.toFixed(1) + " · c " + p.damping.toFixed(2) + " · " + MB.ISLAND[s].w + "×" + MB.ISLAND[s].h + ", r " + MB.ISLAND[s].rb;
+  }
+
+  var controls = document.createElement("div"); controls.className = "mb-controls bar-menu"; root.appendChild(controls);
+  function seg(label, options, onPick, initial) {
+    var wrap = document.createElement("div"); wrap.className = "mb-ctl";
+    var l = document.createElement("span"); l.className = "mb-ctl-label"; l.textContent = label; wrap.appendChild(l);
+    var s = document.createElement("div"); s.className = "mb-seg"; wrap.appendChild(s);
+    var btns = options.map(function (o) {
+      var b = document.createElement("button"); b.textContent = o[1]; b.dataset.v = o[0];
+      b.addEventListener("click", function () { pick(o[0]); onPick(o[0]); });
+      s.appendChild(b); return b;
+    });
+    function pick(v) { btns.forEach(function (b) { b.classList.toggle("is-on", b.dataset.v === v); }); }
+    pick(initial); controls.appendChild(wrap);
+    return pick;
+  }
+  var pickIsland = seg("Остров", [["idle", "Покой"], ["music", "Музыка"], ["player", "Плеер"], ["notify", "Уведомление"]], function (v) {
+    if (v === "notify") desk.notify(); else desk.setState(v);
+  }, "idle");
+  function syncIsland() { pickIsland(desk.state); }
+  seg("Бар", [["solid", "Solid"], ["glass", "Liquid Glass"]], function (v) { desk.setMode(v); }, "solid");
+  seg("Тема", [["dark", "Тёмная"], ["light", "Светлая"]], function (v) { document.documentElement.setAttribute("data-theme", v); desk.refresh(); },
+    document.documentElement.getAttribute("data-theme") === "light" ? "light" : "dark");
+  seg("Скорость", [["1", "1×"], ["5", "0.2× (замедленно)"]], function (v) { MB.timeScale = +v; }, "1");
+  seg("Menu tracking", [["instant", "Мгновенно (macOS)"], ["slide", "Слайд плашки"]], function (v) { desk.setTracking(v); }, "instant");
+  seg("Батарея", [["87", "87 %"], ["c", "Зарядка"], ["8", "8 %"]], function (v) {
+    var D = desk.data; if (v === "c") { D.charging = true; D.battery = 87; } else { D.charging = false; D.battery = +v; } desk.refresh();
+  }, "87");
+
+  readout.className = "mb-readout island-meta"; root.appendChild(readout);
+  var hint = document.createElement("div"); hint.className = "mb-hint panel-caption";
+  hint.textContent = "Нажми на иконку или пункт бара, затем веди курсор вдоль бара — панели переключаются без анимации (menu tracking), ← → тоже работают. Клик по острову в «Музыке» раскрывает плеер, клик мимо — сворачивает. Наведи на уведомление — оно не уйдёт, пока курсор на нём.";
+  root.appendChild(hint);
+  readout.textContent = "Пружина последнего перехода появится здесь.";
+})();
+</script>
+</body>
+</html>
