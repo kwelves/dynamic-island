@@ -206,34 +206,58 @@ function Install-CompiledMod {
             $key.SetValue('SettingsChangeTime', [int][DateTimeOffset]::UtcNow.ToUnixTimeSeconds(), 'DWord')
         }
 
-        # 2c. Запись мода. LibraryFileName последним: это сигнал движку.
-        $key.SetValue('Include', ($meta['include'] -join '|'), 'String')
-        $key.SetValue('Exclude', ($meta['exclude'] -join '|'), 'String')
-        $key.SetValue('Architecture', ($meta['architecture'] -join '|'), 'String')
-        $key.SetValue('Version', [string]$meta['version'], 'String')
-        $key.SetValue('LibraryFileName', $DllName, 'String')
-        $disabled = [int]$key.GetValue('Disabled', 0)
-        $key.Close(); $mods.Close()
-        $log.Add("Реестр: LibraryFileName = $DllName")
-        if ($disabled -ne 0) { $log.Add('ВНИМАНИЕ: мод выключен в Windhawk, включите его там.') }
+        # 2c-2e. Как «Отключить -> Включить» в Windhawk. Одна только смена
+        # LibraryFileName не годится: движок запускает новый процесс мода, пока
+        # старый ещё закрывается, и новый уходит с «Tool mod already running».
+        # Поэтому мод отключается, старый процесс дожидается выхода, ставится
+        # новая DLL, и мод включается снова.
+        $wasEnabled = [int]$key.GetValue('Disabled', 0) -eq 0
+        try {
+            if ($wasEnabled) {
+                $key.SetValue('Disabled', 1, 'DWord')
+                $log.Add('Мод временно отключён.')
+                $deadline = (Get-Date).AddSeconds(15)
+                while ((Get-ModProcess) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+                if (Get-ModProcess) { $log.Add('Старый процесс мода не завершился за 15 с, продолжаю.') }
+            }
 
-        # 2d. Исходник для Windhawk (по нему он показывает версию и настройки).
-        [IO.File]::WriteAllText($oldSourcePath, $text, (New-Object System.Text.UTF8Encoding($false)))
-        $log.Add("Исходник: $oldSourcePath")
+            $key.SetValue('Include', ($meta['include'] -join '|'), 'String')
+            $key.SetValue('Exclude', ($meta['exclude'] -join '|'), 'String')
+            $key.SetValue('Architecture', ($meta['architecture'] -join '|'), 'String')
+            $key.SetValue('Version', [string]$meta['version'], 'String')
+            $key.SetValue('LibraryFileName', $DllName, 'String')
+            $log.Add("Реестр: LibraryFileName = $DllName")
 
-        # 2e. Старые DLL этого мода. Занятые файлы пропускаются, как в Windhawk.
-        # Тот же фильтр, что у Windhawk: "<mod>_" + "...(^|_)цифры" + ".dll".
-        $prefix = "${ModKey}_"
-        foreach ($sub in '32', '64') {
-            Get-ChildItem (Join-Path $modsDir $sub) -File |
-                Where-Object {
+            # Исходник для Windhawk (по нему он показывает версию и настройки).
+            [IO.File]::WriteAllText($oldSourcePath, $text, (New-Object System.Text.UTF8Encoding($false)))
+            $log.Add("Исходник: $oldSourcePath")
+
+            # Старые DLL этого мода. Тот же фильтр, что у Windhawk:
+            # "<mod>_" + "...(^|_)цифры" + ".dll". Занятые файлы пропускаются.
+            $prefix = "${ModKey}_"
+            foreach ($sub in '32', '64') {
+                $old = Get-ChildItem (Join-Path $modsDir $sub) -File | Where-Object {
                     $_.Name -ne $DllName -and $_.Name.StartsWith($prefix) -and $_.Name.EndsWith('.dll') -and
                     $_.Name.Substring($prefix.Length, $_.Name.Length - $prefix.Length - 4) -match '(^|_)[0-9]+$'
-                } |
-                ForEach-Object {
-                    try { Remove-Item $_.FullName -ErrorAction Stop; $log.Add("Удалена старая DLL: $sub\$($_.Name)") }
-                    catch { $log.Add("Старая DLL занята, оставлена: $sub\$($_.Name)") }
                 }
+                foreach ($file in @($old)) {
+                    # $file, а не $_: внутри catch переменная $_ — это уже ошибка.
+                    try {
+                        Remove-Item -LiteralPath $file.FullName -ErrorAction Stop
+                        $log.Add("Удалена старая DLL: $sub\$($file.Name)")
+                    } catch {
+                        $log.Add("Старая DLL занята, оставлена: $sub\$($file.Name)")
+                    }
+                }
+            }
+        } finally {
+            if ($wasEnabled) {
+                $key.SetValue('Disabled', 0, 'DWord')
+                $log.Add('Мод включён.')
+            } else {
+                $log.Add('ВНИМАНИЕ: мод был выключен в Windhawk и остался выключенным.')
+            }
+            $key.Close(); $mods.Close()
         }
         $log.Add('OK')
         $code = 0

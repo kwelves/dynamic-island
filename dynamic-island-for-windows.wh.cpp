@@ -26439,8 +26439,17 @@ BOOL Wh_ModInit() {
         }
 
         if (GetLastError() == ERROR_ALREADY_EXISTS) {
-            Wh_Log(L"Tool mod already running (%s)", WH_MOD_ID);
-            ExitProcess(1);
+            // A reload (recompile, deploy, settings-driven restart) starts this
+            // process while the previous one is still shutting down: stopping its
+            // threads can take a few seconds. Wait for it to let go of the mutex
+            // instead of giving up, which left the mod not running at all until
+            // it was disabled and enabled by hand. Ending the old process releases
+            // the mutex as abandoned, which counts as acquiring it.
+            const DWORD wait = WaitForSingleObject(g_toolModProcessMutex, 10000);
+            if (wait != WAIT_OBJECT_0 && wait != WAIT_ABANDONED) {
+                Wh_Log(L"Tool mod already running (%s)", WH_MOD_ID);
+                ExitProcess(1);
+            }
         }
 
         if (!WhTool_ModInit()) {
