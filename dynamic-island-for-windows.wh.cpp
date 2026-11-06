@@ -809,6 +809,23 @@ namespace MediaLayout {
     constexpr float DockSlotLeft(int slot) {
         return kDockLeft + kDockPad + slot * (kDockSlot + kDockGap);
     }
+
+    // Bar notch: the expanded player follows design/components.md "Раскрытый
+    // плеер" (y from the top of the screen = the content rect's top): cover 64
+    // at (island-pad 20, 44), progress track at y 120 (4 tall), 44x32 buttons
+    // with their box at y 146 and centres 44 + 28 = 72 apart. DrawMedia sets the
+    // flag every frame; the hit tests below read the same numbers.
+    inline std::atomic<bool> g_designPlayer{false};
+    inline bool DesignPlayer() { return g_designPlayer.load(std::memory_order_relaxed); }
+    inline float ControlsY() { return DesignPlayer() ? 146.0f + 32.0f * 0.5f : kControlsY; }
+    inline float ControlSpacing() { return DesignPlayer() ? 44.0f + 28.0f : kControlSpacing; }
+    inline float ScrubberY() { return DesignPlayer() ? 120.0f + 4.0f * 0.5f : kScrubberY; }
+    inline float ScrubLeftNow() { return DesignPlayer() ? 20.0f : kScrubInsetLeft; }
+    inline float ScrubRightNow() { return DesignPlayer() ? 20.0f : kScrubInsetRight; }
+    inline float ArtXNow() { return DesignPlayer() ? 20.0f : kArtInsetX; }
+    inline float ArtYNow() { return DesignPlayer() ? 44.0f : kArtInsetY; }
+    constexpr float kDesignButtonHalfW = 44.0f * 0.5f;
+    constexpr float kDesignButtonHalfH = 32.0f * 0.5f;
 }
 
 // Immersive lyrics view (only used when Modules.MediaTabLyrics is on).
@@ -2055,8 +2072,14 @@ std::wstring FormatWithName(const wchar_t* format, const std::wstring& name) {
 // renderer, the scroll handler and the hit tests can all share this. That
 // arithmetic used to be copy-pasted in seven places, which is exactly how they
 // drifted out of sync.
+// With the top bar on, the calendar lives in the bar's date panel (macOS), so the
+// island drops its calendar tab.
+bool CalendarTabEnabled(const Settings& settings) {
+    return !settings.topBarEnabled;
+}
+
 int ActiveTabCount(const Settings& settings) {
-    int count = 2;  // primary (media or clock) + calendar
+    int count = CalendarTabEnabled(settings) ? 2 : 1;  // primary (media or clock) + calendar?
     if (settings.weather) ++count;
     if (settings.hardwareMonitorModule) ++count;
     if (settings.fileTrayModule) ++count;
@@ -2070,7 +2093,7 @@ int NormalizedTabIndex(const Settings& settings) {
     return ((raw % total) + total) % total;
 }
 
-// Tab order is always: primary, calendar, weather?, hardware?, file tray?
+// Tab order is always: primary, calendar?, weather?, hardware?, file tray?
 // The expensive GPU / network counters are only sampled while the hardware card
 // is actually on screen, so that check needs the card's real index rather than
 // assuming it is the last tab -- which stopped being true once the File Tray
@@ -2087,15 +2110,15 @@ int HardwareMonitorTabIndex(const Settings& settings) {
     if (!settings.hardwareMonitorModule) {
         return -1;
     }
-    return 2 + (settings.weather ? 1 : 0) + MediaTabIndex(settings);
+    return 1 + (CalendarTabEnabled(settings) ? 1 : 0) + (settings.weather ? 1 : 0) + MediaTabIndex(settings);
 }
 
 int FileTrayTabIndex(const Settings& settings) {
     if (!settings.fileTrayModule) {
         return -1;
     }
-    return 2 + (settings.weather ? 1 : 0) + (settings.hardwareMonitorModule ? 1 : 0) +
-           MediaTabIndex(settings);
+    return 1 + (CalendarTabEnabled(settings) ? 1 : 0) + (settings.weather ? 1 : 0) +
+           (settings.hardwareMonitorModule ? 1 : 0) + MediaTabIndex(settings);
 }
 
 // Moves the dashboard one tab (+1 = next, -1 = previous). Clamped at both ends:
@@ -2368,6 +2391,18 @@ int MediaTransportHitTest(const MediaContentPoint& rawPt) {
     }
 
     const float centerX = pt.width * 0.5f;
+    if (MediaLayout::DesignPlayer()) {
+        // 44 x 32 boxes; the pad still leaves a gap between neighbours.
+        const float dyBox = std::fabs(pt.y - MediaLayout::ControlsY());
+        for (int command = 0; command < 3; ++command) {
+            const float bx = centerX + (command - 1) * MediaLayout::ControlSpacing();
+            if (std::fabs(pt.x - bx) <= MediaLayout::kDesignButtonHalfW + MediaLayout::kControlHitPad &&
+                dyBox <= MediaLayout::kDesignButtonHalfH + MediaLayout::kControlHitPad) {
+                return command;
+            }
+        }
+        return -1;
+    }
     const float dy = pt.y - MediaLayout::kControlsY;
 
     struct Target {
@@ -2398,13 +2433,13 @@ float MediaScrubFractionFromContent(const MediaContentPoint& rawPt) {
         return -1.0f;
     }
 
-    const float barLeft = MediaLayout::kScrubInsetLeft;
-    const float barRight = pt.width - MediaLayout::kScrubInsetRight;
+    const float barLeft = MediaLayout::ScrubLeftNow();
+    const float barRight = pt.width - MediaLayout::ScrubRightNow();
     if (barRight - barLeft <= 1.0f) {
         return -1.0f;
     }
 
-    if (std::fabs(pt.y - MediaLayout::kScrubberY) > MediaLayout::kScrubHitHalfHeight ||
+    if (std::fabs(pt.y - MediaLayout::ScrubberY()) > MediaLayout::kScrubHitHalfHeight ||
         pt.x < barLeft - MediaLayout::kScrubHitPadX ||
         pt.x > barRight + MediaLayout::kScrubHitPadX) {
         return -1.0f;
@@ -2420,8 +2455,8 @@ float MediaScrubFractionUnbounded(const MediaContentPoint& rawPt) {
     if (!pt.valid) {
         return -1.0f;
     }
-    const float barLeft = MediaLayout::kScrubInsetLeft;
-    const float barRight = pt.width - MediaLayout::kScrubInsetRight;
+    const float barLeft = MediaLayout::ScrubLeftNow();
+    const float barRight = pt.width - MediaLayout::ScrubRightNow();
     if (barRight - barLeft <= 1.0f) {
         return -1.0f;
     }
@@ -2587,10 +2622,10 @@ bool MediaArtHitTest(const MediaContentPoint& pt) {
                pt.y >= ImmersiveLayout::kArtTop &&
                pt.y <= ImmersiveLayout::kArtTop + ImmersiveLayout::kArtSize;
     }
-    return pt.x >= MediaLayout::kArtInsetX &&
-           pt.x <= MediaLayout::kArtInsetX + MediaLayout::kArtSize &&
-           pt.y >= MediaLayout::kArtInsetY &&
-           pt.y <= MediaLayout::kArtInsetY + MediaLayout::kArtSize;
+    return pt.x >= MediaLayout::ArtXNow() &&
+           pt.x <= MediaLayout::ArtXNow() + MediaLayout::kArtSize &&
+           pt.y >= MediaLayout::ArtYNow() &&
+           pt.y <= MediaLayout::ArtYNow() + MediaLayout::kArtSize;
 }
 
 // True when the point is over the immersive-lyrics toggle button.
@@ -2602,7 +2637,7 @@ bool MediaLyricsButtonHitTest(const MediaContentPoint& rawPt) {
     const float cx = pt.width - ImmersiveLayout::kBtnInsetRight - ImmersiveLayout::kBtnRadius;
     const float reach = ImmersiveLayout::kBtnRadius + ImmersiveLayout::kBtnHitPad;
     return std::fabs(pt.x - cx) <= reach &&
-           std::fabs(pt.y - MediaLayout::kControlsY) <= reach;
+           std::fabs(pt.y - MediaLayout::ControlsY()) <= reach;
 }
 
 // ── Source dock: slot layout + hit testing ──────────────────────────────────
@@ -2637,7 +2672,7 @@ int MediaSourceDockHitTest(const MediaContentPoint& rawPt, int slotCount) {
         return -1;
     }
     const float halfH = std::max(MediaLayout::kDockHitMin, MediaLayout::kDockHeight) * 0.5f;
-    if (std::fabs(pt.y - MediaLayout::kControlsY) > halfH) return -1;
+    if (std::fabs(pt.y - MediaLayout::ControlsY()) > halfH) return -1;
 
     const float left = MediaLayout::kDockLeft;
     const float right = left + MediaLayout::DockWidth(slotCount);
@@ -4248,6 +4283,71 @@ constexpr float kVizMaxH = 14.0f;           // viz-max-h
 constexpr float kVizBarRadius = 1.5f;       // components.md: Музыка
 constexpr float kVizRightInset = 4.0f;      // vizCompact.right = right − compact-inset − 4
 constexpr float kDimAlpha = 0.45f;          // prototype: .mb-item.is-dim
+constexpr float kHairline = 1.0f;           // stroke-hairline
+
+// Expanded player (components.md "Раскрытый плеер"; island.content.artPlayer /
+// vizPlayer; prototype .mb-p-*). y is from the top of the screen, x from L.
+constexpr float kArtPlayer = 64.0f;            // art-player
+constexpr float kRadiusArtPlayer = 12.0f;      // radius-art-player
+constexpr float kPlayerArtY = 44.0f;           // artPlayer.y = bar-height + island-body-top
+constexpr float kPlayerTextX = 96.0f;          // island-pad + art-player + island-row-gap
+constexpr float kPlayerTextY = 56.0f;          // island-body-top + 12 below the bar
+constexpr float kPlayerTextRightInset = 50.0f; // prototype .mb-p-text: right = island-pad + 30
+constexpr float kPlayerVizCenterY = 54.0f;     // vizPlayer.centerY
+constexpr float kPlayerVizMaxH = 18.0f;        // vizPlayer.maxH
+constexpr float kProgressY = 120.0f;           // components.md: Прогресс y = 120
+constexpr float kProgressH = 4.0f;             // progress-h (radius = h / 2)
+constexpr float kTimecodeGap = 4.0f;           // "+4 под прогрессом"
+constexpr float kControlsTop = 146.0f;         // buttons' box top
+constexpr float kControlBoxW = 44.0f;          // 44 x 32 box, radius 16
+constexpr float kControlBoxH = 32.0f;
+constexpr float kRadiusControl = 16.0f;
+constexpr float kControlStep = 72.0f;          // "шаг 44 + 28"
+constexpr float kControlGlyph = 20.0f;         // prev / next
+constexpr float kControlGlyphPlay = 26.0f;     // play / pause
+
+// Panels (components.md "Модульная панель Control Center", "Положение панели")
+constexpr float kPanelW = 300.0f;              // panel-w
+constexpr float kRadiusPanel = 16.0f;          // radius-panel
+constexpr float kPanelPadY = 10.0f;            // panel-pad-y
+constexpr float kPanelGap = 6.0f;              // panel-gap (below the bar)
+constexpr float kPanelMargin = 8.0f;           // panel-margin (from the screen edges)
+constexpr float kPanelRowInset = 6.0f;         // panel-row-inset
+constexpr float kPanelContentX = 16.0f;        // panel-content-x
+constexpr float kPanelRowGap = 10.0f;          // panel-row-gap
+constexpr float kPanelHeaderH = 38.0f;         // panel-header-h
+constexpr float kPanelSectionH = 26.0f;        // panel-section-h
+constexpr float kPanelSectionBottom = 4.0f;    // section text sits 4 above its bottom
+constexpr float kPanelRowH = 34.0f;            // panel-row-h
+constexpr float kPanelLinkH = 28.0f;           // panel-link-h
+constexpr float kRadiusPanelRow = 8.0f;        // radius-panel-row
+constexpr float kRowCircle = 26.0f;            // row-circle
+constexpr float kRowGlyph = 13.0f;             // row-glyph
+constexpr float kRowTrailGlyph = 12.0f;        // lock / checkmark
+constexpr float kSwitchW = 32.0f;              // switch-w
+constexpr float kSwitchH = 18.0f;              // switch-h (knob = h - 2, inset 1)
+constexpr float kRadiusSwitch = 9.0f;          // radius-switch
+constexpr float kSliderH = 22.0f;              // slider-h
+constexpr float kRadiusSlider = 11.0f;         // radius-slider
+constexpr float kSliderGlyph = 13.0f;          // slider-glyph-size
+constexpr float kSliderPadTop = 2.0f;          // .mb-slider-row padding 2 / 8
+constexpr float kSliderPadBottom = 8.0f;
+constexpr float kSepMarginY = 5.0f;            // sep-margin-y
+constexpr float kSepInsetX = 16.0f;            // sep-inset-x
+constexpr float kBarHighlightH = 24.0f;        // bar-highlight-h
+constexpr float kBarHighlightInsetY = 4.0f;    // bar-highlight-inset-y
+constexpr float kRadiusBarHighlight = 6.0f;    // radius-bar-highlight
+constexpr float kPanelShadowY = 12.0f;         // shadow-panel (dark): 0 12 36, d2dStdDev 18
+constexpr float kPanelShadowStdDev = 18.0f;
+constexpr float kPanelShadowAlpha = 0.45f;
+constexpr float kPanelEdgeSpread = 0.5f;       // shadow-panel ring: spread 0.5, 0.60
+constexpr float kPanelEdgeAlpha = 0.60f;
+constexpr float kKnobShadowY = 1.0f;           // shadow-knob: 0 1 3, 0.35
+constexpr float kKnobShadowAlpha = 0.35f;
+constexpr float kPanelOpenScale = 0.94f;       // motion.md: panel.open 0.94 -> 1
+constexpr float kPanelOpenDy = -6.0f;          //            translateY -6 -> 0
+constexpr float kPanelCloseScale = 0.98f;      // panel.close 1 -> 0.98
+constexpr float kRowsOffAlpha = 0.35f;         // "модуль выключен -> строки 35 %"
 
 // island.states
 struct IslandState {
@@ -4272,6 +4372,23 @@ constexpr D2D1_COLOR_F kGlassInk{1.0f, 1.0f, 1.0f, 1.0f};            // bar-glas
 constexpr D2D1_COLOR_F kAccent{0.0392f, 0.5176f, 1.0f, 1.0f};        // accent
 constexpr D2D1_COLOR_F kOnAccent{1.0f, 1.0f, 1.0f, 1.0f};            // on-accent
 constexpr D2D1_COLOR_F kRed{1.0f, 0.2706f, 0.2275f, 1.0f};           // red
+constexpr D2D1_COLOR_F kIslandTrack{1.0f, 1.0f, 1.0f, 0.2f};         // island-track
+constexpr D2D1_COLOR_F kBarHighlight{1.0f, 1.0f, 1.0f, 0.22f};       // bar-highlight
+constexpr D2D1_COLOR_F kPanelBg{0.149f, 0.149f, 0.157f, 0.8f};       // panel-bg
+constexpr D2D1_COLOR_F kPanelBgSolid{0.149f, 0.149f, 0.157f, 1.0f};  // panel-bg-solid
+constexpr D2D1_COLOR_F kPanelRim{1.0f, 1.0f, 1.0f, 0.129f};          // panel-rim
+constexpr D2D1_COLOR_F kInk1{1.0f, 1.0f, 1.0f, 0.859f};              // ink-1
+constexpr D2D1_COLOR_F kInk2{1.0f, 1.0f, 1.0f, 0.561f};              // ink-2
+constexpr D2D1_COLOR_F kInk3{1.0f, 1.0f, 1.0f, 0.278f};              // ink-3
+constexpr D2D1_COLOR_F kSeparator{1.0f, 1.0f, 1.0f, 0.110f};         // separator
+constexpr D2D1_COLOR_F kRowHover{1.0f, 1.0f, 1.0f, 0.102f};          // row-hover
+constexpr D2D1_COLOR_F kRowPress{1.0f, 1.0f, 1.0f, 0.169f};          // row-press
+constexpr D2D1_COLOR_F kFillOff{1.0f, 1.0f, 1.0f, 0.129f};           // fill-off
+constexpr D2D1_COLOR_F kSwitchOff{1.0f, 1.0f, 1.0f, 0.188f};         // switch-off
+constexpr D2D1_COLOR_F kKnob{1.0f, 1.0f, 1.0f, 1.0f};                // knob
+constexpr D2D1_COLOR_F kSliderTrack{1.0f, 1.0f, 1.0f, 0.141f};       // slider-track
+constexpr D2D1_COLOR_F kSliderGlyphInk{0.0f, 0.0f, 0.0f, 0.549f};    // slider-glyph
+constexpr D2D1_COLOR_F kAccentText{0.251f, 0.612f, 1.0f, 1.0f};      // accent-text
 
 // springs (motion.md): stiffness / damping for mass 1
 struct SpringParams {
@@ -4283,6 +4400,34 @@ constexpr SpringParams kIslandCollapse{223.80f, 27.53f};  // island.collapse
 constexpr SpringParams kIslandDrop{130.51f, 14.62f};      // island.drop
 constexpr SpringParams kBarItems{438.65f, 41.89f};        // bar.items
 constexpr SpringParams kVizBar{986.96f, 34.56f};          // viz.bar
+constexpr SpringParams kPanelOpen{341.51f, 29.57f};       // panel.open
+constexpr SpringParams kPanelFade{815.67f, 57.12f};       // panel.fade
+constexpr SpringParams kSwitchKnob{503.55f, 35.01f};      // switch.knob
+constexpr SpringParams kSliderJump{438.65f, 41.89f};      // slider.jump
+
+// tweens (motion.md): duration and cubic-bezier control points
+struct Tween {
+    double seconds;
+    float x1, y1, x2, y2;
+};
+constexpr Tween kPanelClose{0.160, 0.0f, 0.0f, 0.2f, 1.0f};    // panel.close
+constexpr Tween kHighlightOff{0.120, 0.0f, 0.0f, 1.0f, 1.0f};  // highlight.off (linear)
+constexpr Tween kSwitchTrack{0.180, 0.2f, 0.0f, 0.0f, 1.0f};   // switch.track
+
+// Value of a CSS cubic-bezier easing at progress t (0..1).
+inline float Ease(const Tween& tw, float t) {
+    t = std::clamp(t, 0.0f, 1.0f);
+    auto coord = [](float p1, float p2, float u) {
+        const float a = 1.0f - 3.0f * p2 + 3.0f * p1, b = 3.0f * p2 - 6.0f * p1, c = 3.0f * p1;
+        return ((a * u + b) * u + c) * u;
+    };
+    float lo = 0.0f, hi = 1.0f, u = t;
+    for (int i = 0; i < 24; ++i) {  // solve x(u) = t
+        u = (lo + hi) * 0.5f;
+        if (coord(tw.x1, tw.x2, u) < t) lo = u; else hi = u;
+    }
+    return coord(tw.y1, tw.y2, u);
+}
 
 // delays (motion.md)
 constexpr double kBarItemsReturnStaggerSec = 0.025;  // bar_items_return_stagger_ms, per 40 px
@@ -4305,6 +4450,17 @@ constexpr wchar_t kGlyphBatteryCharging[11] = {0xE85A, 0xE85B, 0xE85C, 0xE85D, 0
                                                0xE860, 0xE861, 0xE862, 0xE83E, 0xEA93};
 constexpr wchar_t kGlyphBrightness = 0xE706;  // weather: clear
 constexpr wchar_t kGlyphCloud = 0xE753;       // weather: cloudy
+constexpr wchar_t kGlyphSettings = 0xE713;
+constexpr wchar_t kGlyphCheckmark = 0xE73E;
+constexpr wchar_t kGlyphChevronRight = 0xE76C;
+constexpr wchar_t kGlyphSpeakers = 0xE7F5;
+constexpr wchar_t kGlyphHeadphone = 0xE7F6;
+constexpr wchar_t kGlyphKeyboard = 0xE765;
+constexpr wchar_t kGlyphPlay = 0xE768;
+constexpr wchar_t kGlyphPause = 0xE769;
+constexpr wchar_t kGlyphPrevious = 0xE892;
+constexpr wchar_t kGlyphNext = 0xE893;
+constexpr wchar_t kGlyphCalendar = 0xE787;
 
 inline int BatteryIndex(int pct) {
     return pct >= 95 ? 10 : pct < 5 ? 0 : (pct - 5) / 10 + 1;
@@ -4318,7 +4474,10 @@ inline wchar_t VolumeGlyph(int pct, bool muted) {
 }
 
 // typography.styles
-enum class Text { BarApp, BarMenu, BarLayout, IslandTime, IslandNotifyTitle, IslandNotifyBody, IslandMeta, Count };
+enum class Text {
+    BarApp, BarMenu, BarLayout, IslandTime, IslandNotifyTitle, IslandNotifyBody, IslandMeta,
+    IslandTitle, IslandSub, PanelTitle, PanelSection, PanelRow, PanelCaption, Count
+};
 struct TextSpec {
     bool small;  // "Segoe UI Variable Small" instead of "... Text"
     float size;
@@ -4335,6 +4494,12 @@ constexpr TextSpec kText[static_cast<int>(Text::Count)] = {
     {false, 13.0f, 16.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, -0.08f, false},  // island-notify-title
     {false, 12.0f, 15.0f, DWRITE_FONT_WEIGHT_NORMAL, 0.0f, false},       // island-notify-body
     {true, 11.0f, 13.0f, DWRITE_FONT_WEIGHT_MEDIUM, 0.06f, true},        // island-meta
+    {false, 15.0f, 20.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, -0.23f, false},  // island-title
+    {false, 13.0f, 16.0f, DWRITE_FONT_WEIGHT_NORMAL, -0.08f, false},     // island-sub
+    {false, 13.0f, 16.0f, DWRITE_FONT_WEIGHT_BOLD, -0.08f, false},       // panel-title
+    {true, 11.0f, 14.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, 0.06f, false},    // panel-section
+    {false, 13.0f, 16.0f, DWRITE_FONT_WEIGHT_NORMAL, -0.08f, false},     // panel-row
+    {true, 11.0f, 14.0f, DWRITE_FONT_WEIGHT_NORMAL, 0.06f, false},       // panel-caption
 };
 
 }  // namespace Design
@@ -15044,11 +15209,17 @@ class Renderer {
     // sizeScale magnifies the whole island via a transform, whereas this changes
     // only the type, so the island can stay compact while the clock and labels
     // get bigger.
+    bool lastDesignFonts_ = false;
     void EnsureTextFormats(float scale, const std::wstring& fontFamily, float textScale) {
+        // Bar notch: the island's own text uses the design's families
+        // (typography.families: Segoe UI Variable Text / Small) unless the user
+        // picked a font.
+        const bool designFonts = g_settings.topBarEnabled && g_settings.notchStyle;
         if (std::abs(scale - lastFontScale_) < 0.001f && fontFamily == lastFontFamily_ &&
-            std::abs(textScale - lastTextScale_) < 0.001f) {
+            std::abs(textScale - lastTextScale_) < 0.001f && designFonts == lastDesignFonts_) {
             return;
         }
+        lastDesignFonts_ = designFonts;
         lastTextScale_ = textScale;
         const float ts = Clamp(textScale, 0.7f, 1.6f);
 
@@ -15071,7 +15242,7 @@ class Renderer {
         timeDashboardFormat_ = nullptr;
         dateDashboardFormat_ = nullptr;
 
-        const wchar_t* defaultDisplay = L"Segoe UI Variable Display";
+        const wchar_t* defaultDisplay = designFonts ? L"Segoe UI Variable Text" : L"Segoe UI Variable Display";
         const wchar_t* defaultSmall = L"Segoe UI Variable Small";
         const wchar_t* mainFamily = fontFamily.empty() ? defaultDisplay : fontFamily.c_str();
         const wchar_t* smallFamily = fontFamily.empty() ? defaultSmall : fontFamily.c_str();
@@ -15261,9 +15432,16 @@ class Renderer {
         lastFontFamily_ = fontFamily;
     }
 
+    // Bar notch: the island takes its colours from design/design-tokens.json.
+    bool designColors_ = false;
+
     void EnsureBrushes(const Settings& settings, const SharedState& state, double now) {
+        designColors_ = settings.topBarEnabled && settings.notchStyle;
         D2D1_COLOR_F targetAccent = settings.customAccent;
-        if (settings.accentMode == AccentMode::System) {
+        if (designColors_ && !(settings.accentMode == AccentMode::Auto && state.media.art)) {
+            // accent; the cover's dominant colour still drives the visualiser.
+            targetAccent = Design::kAccent;
+        } else if (settings.accentMode == AccentMode::System) {
             targetAccent = GetSystemAccentColor();
         } else if (settings.accentMode == AccentMode::Auto && state.media.art) {
             // Already contrast-corrected when the art was decoded.
@@ -15304,11 +15482,15 @@ class Renderer {
         // Use user-configured text colors.
         D2D1_COLOR_F primary = settings.textPrimaryColor;
         primary.a = 0.98f;
+        if (designColors_) primary = Design::kBarInk;  // bar-ink
         if (!textBrush_) target_->CreateSolidColorBrush(primary, &textBrush_);
         else textBrush_->SetColor(primary);
 
         D2D1_COLOR_F secondary = settings.textSecondaryColor;
         secondary.a = 0.90f;
+        // island-ink-2 (white 60 %). Callers dim this brush by a further 0.75..0.8,
+        // so its own alpha is 0.75 to land on the token's 0.6.
+        if (designColors_) secondary = D2D1::ColorF(1.0f, 1.0f, 1.0f, Design::kIslandInk2.a / 0.8f);
         if (!mutedBrush_) target_->CreateSolidColorBrush(secondary, &mutedBrush_);
         else mutedBrush_->SetColor(secondary);
 
@@ -15564,6 +15746,14 @@ class Renderer {
 
         t.textPrimary = WithAlpha(settings.textPrimaryColor, 0.98f);
         t.textSecondary = WithAlpha(settings.textSecondaryColor, 0.88f);
+        if (designColors_) {
+            // Cards fill-off, active chips island-track, separators separator.
+            t.raised = Design::kFillOff;
+            t.raisedStrong = Design::kIslandTrack;
+            t.hairline = Design::kSeparator;
+            t.textPrimary = Design::kBarInk;
+            t.textSecondary = Design::kIslandInk2;
+        }
         // Derived rather than configured, so a third tier always reads as
         // quieter than "secondary" whatever the user picked.
         t.textTertiary = WithAlpha(MixColor(settings.textSecondaryColor, t.base, 0.35f), 0.72f);
@@ -15845,6 +16035,20 @@ class Renderer {
     // Accent-filled progress track shared by the scrubber, volume, battery and
     // timer, so "progress" looks the same everywhere.
     void DrawAccentTrack(D2D1_RECT_F track, float progress, float radius) {
+        if (designColors_) {
+            if (ID2D1SolidColorBrush* bg = AcquireBrush(WithAlpha(Design::kIslandTrack, Design::kIslandTrack.a * settingsOpacity_))) {
+                target_->FillRoundedRectangle(D2D1::RoundedRect(track, radius, radius), bg);
+            }
+            const float span = (track.right - track.left) * Clamp(progress, 0.0f, 1.0f);
+            if (span > 0.5f) {
+                if (ID2D1SolidColorBrush* fill = AcquireBrush(WithAlpha(Design::kBarInk, settingsOpacity_))) {
+                    target_->FillRoundedRectangle(
+                        D2D1::RoundedRect(D2D1::RectF(track.left, track.top, track.left + span, track.bottom), radius, radius),
+                        fill);
+                }
+            }
+            return;
+        }
         if (raisedStrongBrush_) {
             target_->FillRoundedRectangle(D2D1::RoundedRect(track, radius, radius), raisedStrongBrush_.Get());
         }
@@ -16037,9 +16241,15 @@ class Renderer {
     // live spectrum while playing, to the minimum when paused.
     void DrawNotchViz(const SharedState& state, D2D1_RECT_F rect, const Settings& settings, double now) {
         const float band = BarNotchHeight(settings);
-        const float right = rect.right - Design::kCompactInset - Design::kVizRightInset;
+        DrawVizBars(state, rect.right - Design::kCompactInset - Design::kVizRightInset, rect.top + band * 0.5f,
+                    Design::kVizMaxH, now);
+    }
+
+    // Four bars ending at `right`, centred on `cy`, at most `maxH` tall: the
+    // compact visualiser (max 14) and the player's (vizPlayer: max 18) share the
+    // springs, so moving between them is one continuous motion.
+    void DrawVizBars(const SharedState& state, float right, float cy, float maxH, double now) {
         const float left = right - (4.0f * Design::kVizBarW + 3.0f * Design::kVizGap);
-        const float cy = rect.top + band * 0.5f;
         const float dt = notchVizLast_ < 0.0 ? 0.0f : Clamp(static_cast<float>(now - notchVizLast_), 0.0f, 0.05f);
         notchVizLast_ = now;
         if (now >= notchVizRetargetAt_) {
@@ -16067,8 +16277,9 @@ class Renderer {
         color.a = settingsOpacity_;
         ID2D1SolidColorBrush* brush = AcquireBrush(color);
         if (!brush) return;
+        const float k = maxH / Design::kVizMaxH;  // the springs run on the compact scale
         for (int i = 0; i < 4; ++i) {
-            const float h = Clamp(notchViz_[i].value, 2.0f, Design::kVizMaxH + 3.0f);
+            const float h = Clamp(notchViz_[i].value, 2.0f, Design::kVizMaxH + 3.0f) * k;
             const float x = left + i * (Design::kVizBarW + Design::kVizGap);
             target_->FillRoundedRectangle(
                 D2D1::RoundedRect(D2D1::RectF(x, cy - h * 0.5f, x + Design::kVizBarW, cy + h * 0.5f),
@@ -18447,7 +18658,7 @@ class Renderer {
             // Expanded Mode. Order must match ActiveTabCount()/FileTrayTabIndex().
             std::vector<int> activeTabs;
             activeTabs.push_back(3); // Time (shown first when the island expands/on hover)
-            activeTabs.push_back(0); // Calendar
+            if (CalendarTabEnabled(settings)) activeTabs.push_back(0); // Calendar
             if (settings.weather) activeTabs.push_back(1);
             if (settings.hardwareMonitorModule) activeTabs.push_back(2);
             if (settings.fileTrayModule) activeTabs.push_back(4);
@@ -18888,6 +19099,152 @@ class Renderer {
         return std::min(contentHeight * 0.5f, 44.0f);
     }
 
+    // ── Expanded player in the bar notch ─────────────────────────────────────
+    // design/components.md "Раскрытый плеер" (prototype .mb-p-*), positions from
+    // L and from the top of the screen (= rect.top): cover 64 / r12 at (20, 44);
+    // title island-title and artist island-sub (island-ink-2) at (96, 56), cut
+    // with "…" 50 px before R; the 4-bar visualiser ends at R − 20, centred on
+    // y 54, max 18; progress 4 tall at y 120 from L + 20 to R − 20 (island-track,
+    // bar-ink fill, radius 2); timecodes island-meta 4 below it at both ends;
+    // ⏮ ⏯ ⏭ in 44 × 32 boxes (radius 16, hover island-track) at y 146, 72 apart,
+    // glyphs 20 / 26 / 20. The mod's source dock, immersive lyrics and the lyrics
+    // button stay where they were relative to that row.
+    void DrawDesignPlayer(const SharedState& state, D2D1_RECT_F rect, const Settings& settings, double now,
+                          float artMorph, D2D1_RECT_F artRect, float artRadius, float immersiveMix) {
+        float swapAlpha = 1.0f, swapDx = 0.0f;
+        UpdateSourceSwap(state, now, &swapAlpha, &swapDx);
+        const bool grouped = BeginSwapGroup(swapAlpha, swapDx);
+        if (swapAlpha > 0.003f) {
+            if (artMorph >= 1.0f) {
+                DrawAlbumArtFlip(state.media, artRect, now, artRadius, immersiveMix < 0.01f);
+            }
+            const bool faded = BeginImmersiveFade(1.0f - immersiveMix);
+            if (immersiveMix < 0.999f) {
+                const float textLeft = rect.left + Design::kPlayerTextX;
+                const float textWidth = std::max(10.0f, rect.right - Design::kPlayerTextRightInset - textLeft);
+                const Design::TextSpec& titleSpec = Design::kText[static_cast<int>(Design::Text::IslandTitle)];
+                const Design::TextSpec& subSpec = Design::kText[static_cast<int>(Design::Text::IslandSub)];
+                const std::wstring titleText =
+                    state.media.title.empty() ? std::wstring(Loc(L"Unknown")) : state.media.title;
+                ComPtr<IDWriteTextLayout> title =
+                    DesignType::Layout(titleText, Design::Text::IslandTitle, 1.0f, textWidth, titleSpec.lineHeight);
+                ComPtr<IDWriteTextLayout> artist =
+                    DesignType::Layout(state.media.artist, Design::Text::IslandSub, 1.0f, textWidth, subSpec.lineHeight);
+                const float y = rect.top + Design::kPlayerTextY;
+                if (ID2D1SolidColorBrush* ink = AcquireBrush(WithAlpha(Design::kBarInk, settingsOpacity_))) {
+                    if (title) target_->DrawTextLayout(D2D1::Point2F(textLeft, y), title.Get(), ink);
+                }
+                if (ID2D1SolidColorBrush* ink2 =
+                        AcquireBrush(WithAlpha(Design::kIslandInk2, Design::kIslandInk2.a * settingsOpacity_))) {
+                    if (artist) target_->DrawTextLayout(D2D1::Point2F(textLeft, y + titleSpec.lineHeight), artist.Get(), ink2);
+                }
+                DrawVizBars(state, rect.right - Design::kIslandPad, rect.top + Design::kPlayerVizCenterY,
+                            Design::kPlayerVizMaxH, now);
+            }
+            EndImmersiveFade(faded);
+            DrawImmersiveLyricsView(state, rect, settings, now, immersiveMix);
+        }
+        EndSwapGroup(grouped);
+
+        // Immersive lyrics shrink the transport block, exactly as the classic player.
+        D2D1_MATRIX_3X2_F zoneTransform;
+        target_->GetTransform(&zoneTransform);
+        if (immersiveMix > 0.001f) {
+            const float ps = 1.0f + (ImmersiveLayout::kPlayerScale - 1.0f) * immersiveMix;
+            target_->SetTransform(
+                D2D1::Matrix3x2F::Scale(ps, ps, D2D1::Point2F((rect.left + rect.right) * 0.5f,
+                                                              rect.top + ImmersiveLayout::kPlayerPivotY)) *
+                zoneTransform);
+        }
+
+        // Progress + timecodes (linear, once a second, no spring: motion.md).
+        const bool timelineGrouped = BeginSwapGroup(swapAlpha, 0.0f);
+        double position = state.media.positionTicks / 10000000.0;
+        const double duration = state.media.endTicks / 10000000.0;
+        if (state.media.playing && state.media.lastUpdatedTicks > 0) {
+            position += (GetTickCount64() - state.media.lastUpdatedTicks) / 1000.0;
+        }
+        position = std::max(0.0, std::min(position, duration));
+        float progress = duration > 0.0 ? static_cast<float>(position / duration) : 0.0f;
+        if (g_scrubbing.load(std::memory_order_relaxed)) {
+            progress = Clamp(g_scrubDragFraction.load(std::memory_order_relaxed), 0.0f, 1.0f);
+            position = duration * progress;
+        }
+        const float barLeft = rect.left + Design::kIslandPad;
+        const float barRight = rect.right - Design::kIslandPad;
+        const float barTop = rect.top + Design::kProgressY;
+        const float barR = Design::kProgressH * 0.5f;
+        if (ID2D1SolidColorBrush* track =
+                AcquireBrush(WithAlpha(Design::kIslandTrack, Design::kIslandTrack.a * settingsOpacity_))) {
+            target_->FillRoundedRectangle(
+                D2D1::RoundedRect(D2D1::RectF(barLeft, barTop, barRight, barTop + Design::kProgressH), barR, barR),
+                track);
+        }
+        const float span = (barRight - barLeft) * Clamp(progress, 0.0f, 1.0f);
+        if (span > 0.5f) {
+            if (ID2D1SolidColorBrush* fill = AcquireBrush(WithAlpha(Design::kBarInk, settingsOpacity_))) {
+                target_->FillRoundedRectangle(
+                    D2D1::RoundedRect(D2D1::RectF(barLeft, barTop, barLeft + std::max(span, Design::kProgressH),
+                                                  barTop + Design::kProgressH),
+                                      barR, barR),
+                    fill);
+            }
+        }
+        auto clock = [](double seconds) {
+            const int total = (seconds <= 0.0 || _isnan(seconds)) ? 0 : static_cast<int>(std::lround(seconds));
+            wchar_t buf[16];
+            swprintf_s(buf, L"%d:%02d", total / 60, total % 60);
+            return std::wstring(buf);
+        };
+        const Design::TextSpec& metaSpec = Design::kText[static_cast<int>(Design::Text::IslandMeta)];
+        const float metaTop = barTop + Design::kProgressH + Design::kTimecodeGap;
+        ComPtr<IDWriteTextLayout> elapsed =
+            DesignType::Layout(clock(position), Design::Text::IslandMeta, 1.0f, 200.0f, metaSpec.lineHeight);
+        ComPtr<IDWriteTextLayout> remaining = DesignType::Layout(L"\x2212" + clock(duration - position),
+                                                                 Design::Text::IslandMeta, 1.0f, 200.0f,
+                                                                 metaSpec.lineHeight);
+        if (ID2D1SolidColorBrush* ink2 =
+                AcquireBrush(WithAlpha(Design::kIslandInk2, Design::kIslandInk2.a * settingsOpacity_))) {
+            if (elapsed) target_->DrawTextLayout(D2D1::Point2F(barLeft, metaTop), elapsed.Get(), ink2);
+            if (remaining) {
+                target_->DrawTextLayout(D2D1::Point2F(barRight - DesignType::Width(remaining.Get()), metaTop),
+                                        remaining.Get(), ink2);
+            }
+        }
+        EndSwapGroup(timelineGrouped);
+
+        // Transport buttons.
+        UpdateMediaButtonAnimations(now, state.media.playing);
+        const float cx = (rect.left + rect.right) * 0.5f;
+        const float cy = rect.top + MediaLayout::ControlsY();
+        const wchar_t glyphs[3] = {Design::kGlyphPrevious, state.media.playing ? Design::kGlyphPause : Design::kGlyphPlay,
+                                   Design::kGlyphNext};
+        const int hovered = g_hoveredMediaButton.load(std::memory_order_relaxed);
+        for (int i = 0; i < 3; ++i) {
+            const float bx = cx + (i - 1) * MediaLayout::ControlSpacing();
+            const D2D1_RECT_F box = D2D1::RectF(bx - Design::kControlBoxW * 0.5f, cy - Design::kControlBoxH * 0.5f,
+                                                bx + Design::kControlBoxW * 0.5f, cy + Design::kControlBoxH * 0.5f);
+            const float plate = std::max(hovered == i ? 1.0f : 0.0f, Clamp(mediaBtnPress_[i], 0.0f, 1.0f));
+            if (plate > 0.003f) {
+                if (ID2D1SolidColorBrush* bg = AcquireBrush(WithAlpha(
+                        Design::kIslandTrack, Design::kIslandTrack.a * plate * settingsOpacity_))) {
+                    target_->FillRoundedRectangle(D2D1::RoundedRect(box, Design::kRadiusControl, Design::kRadiusControl), bg);
+                }
+            }
+            IDWriteTextFormat* icons =
+                DesignType::Icons(i == 1 ? Design::kControlGlyphPlay : Design::kControlGlyph, 1.0f);
+            if (ID2D1SolidColorBrush* ink = AcquireBrush(WithAlpha(Design::kBarInk, settingsOpacity_))) {
+                if (icons) target_->DrawTextW(&glyphs[i], 1, icons, box, ink, D2D1_DRAW_TEXT_OPTIONS_NONE);
+            }
+        }
+
+        DrawSourceDock(state, rect, now);
+        if (settings.mediaTabLyrics) {
+            DrawImmersiveLyricsButton(rect, immersiveMix);
+        }
+        target_->SetTransform(zoneTransform);
+    }
+
     // Takes settings by reference from Render()'s private copy rather than
     // reaching for g_settings. The dashboards it delegates to read std::wstring
     // members (DrawCalendarDashboard -> settings.dateFormat), which would
@@ -18912,6 +19269,8 @@ class Renderer {
 
         expandedAnim_ = settings.expandedMediaAnim;
         pillCoverAnim_ = settings.pillCoverAnim;
+        MediaLayout::g_designPlayer.store(BarNotchHeight(settings) > 0.0f, std::memory_order_relaxed);
+        const bool designPlayer = MediaLayout::DesignPlayer();
 
         // The old side panel is replaced by the immersive lyrics view, so the island never widens.
         const bool sideLyricsOn = false;
@@ -18995,9 +19354,9 @@ class Renderer {
             rect.top + kCollapsedArtPad + collapsedArtSize);
         auto lerpF = [](float a, float b, float t) { return a + (b - a) * t; };
         const D2D1_RECT_F normalArtRect = D2D1::RectF(
-            rect.left + MediaLayout::kArtInsetX, rect.top + MediaLayout::kArtInsetY,
-            rect.left + MediaLayout::kArtInsetX + MediaLayout::kArtSize,
-            rect.top + MediaLayout::kArtInsetY + MediaLayout::kArtSize);
+            rect.left + MediaLayout::ArtXNow(), rect.top + MediaLayout::ArtYNow(),
+            rect.left + MediaLayout::ArtXNow() + MediaLayout::kArtSize,
+            rect.top + MediaLayout::ArtYNow() + MediaLayout::kArtSize);
         const D2D1_RECT_F immersiveArtRect = D2D1::RectF(
             rect.left + ImmersiveLayout::kArtLeft, rect.top + ImmersiveLayout::kArtTop,
             rect.left + ImmersiveLayout::kArtLeft + ImmersiveLayout::kArtSize,
@@ -19009,7 +19368,7 @@ class Renderer {
             lerpF(normalArtRect.right, immersiveArtRect.right, immersiveMix),
             lerpF(normalArtRect.bottom, immersiveArtRect.bottom, immersiveMix));
         const float expandedArtRadius =
-            lerpF(16.0f, ImmersiveLayout::kArtSize * 0.5f, immersiveMix);
+            lerpF(designPlayer ? Design::kRadiusArtPlayer : 16.0f, ImmersiveLayout::kArtSize * 0.5f, immersiveMix);
         const D2D1_RECT_F morphArtRect = D2D1::RectF(
             lerpF(collapsedArtRect.left, expandedArtRect.left, artMorph),
             lerpF(collapsedArtRect.top, expandedArtRect.top, artMorph),
@@ -19027,7 +19386,7 @@ class Renderer {
             const bool lyricsFirst = settings.lyricsPinnedFirst && settings.lyrics;
             if (lyricsFirst) activeTabs.push_back(5);  // Lyrics (pinned first)
             activeTabs.push_back(0); // Media
-            activeTabs.push_back(1); // Calendar
+            if (CalendarTabEnabled(settings)) activeTabs.push_back(1); // Calendar
             if (settings.weather) activeTabs.push_back(2);
             if (settings.hardwareMonitorModule) activeTabs.push_back(3);
             if (settings.fileTrayModule) activeTabs.push_back(4);
@@ -19040,7 +19399,10 @@ class Renderer {
             if (tabIdx >= maxTabs) tabIdx = maxTabs - 1;
 
             auto drawTabContent = [&](int activeTabId) {
-            if (activeTabId == 0) {
+            if (activeTabId == 0 && designPlayer) {
+                DrawDesignPlayer(state, rect, settings, now, artMorph, expandedArtRect, expandedArtRadius,
+                                 immersiveMix);
+            } else if (activeTabId == 0) {
                 // With side lyrics on, the player lives in the left part of the island and
                 // the rest of this branch (which uses `rect`) lays out exactly as before.
                 const D2D1_RECT_F fullIslandRect = rect;
@@ -19536,7 +19898,7 @@ class Renderer {
         if (!EnsureRoundJoinStyle()) return;
         const float r = ImmersiveLayout::kBtnRadius;
         const D2D1_POINT_2F c = D2D1::Point2F(rect.right - ImmersiveLayout::kBtnInsetRight - r,
-                                              rect.top + MediaLayout::kControlsY);
+                                              rect.top + MediaLayout::ControlsY());
         const bool hovered = g_hoveredLyricsBtn.load(std::memory_order_relaxed);
 
         const D2D1_COLOR_F restBg = D2D1::ColorF(1.0f, 1.0f, 1.0f, hovered ? 0.09f : 0.040f);
@@ -20474,7 +20836,7 @@ class Renderer {
         if (moving) g_layoutDirty = true;
 
         // ── Drawing ──────────────────────────────────────────────────────────
-        const float cy = rect.top + MediaLayout::kControlsY;
+        const float cy = rect.top + MediaLayout::ControlsY();
         const float x0 = rect.left + MediaLayout::kDockLeft;
         const D2D1_RECT_F pill = D2D1::RectF(x0, cy - MediaLayout::kDockHeight * 0.5f,
                                              x0 + MediaLayout::DockWidth(slots.count),
