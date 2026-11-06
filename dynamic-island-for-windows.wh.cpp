@@ -6,7 +6,7 @@
 // @author          Himanshu
 // @github          https://github.com/devcode90
 // @include         windhawk.exe
-// @compilerOptions -lole32 -loleaut32 -lshcore -ld2d1 -ldwrite -ldwmapi -lgdi32 -luser32 -lshell32 -lruntimeobject -lwindowscodecs -lsetupapi -lwinhttp -lpdh -lwinmm
+// @compilerOptions -lole32 -loleaut32 -lshcore -ld2d1 -ldwrite -ldwmapi -lgdi32 -luser32 -lshell32 -lruntimeobject -lwindowscodecs -lsetupapi -lwinhttp -lpdh -lwinmm -lversion -lwlanapi
 // @license         MIT
 // ==/WindhawkMod==
 
@@ -666,6 +666,8 @@ We love community contributions! To ensure high-quality updates, please follow t
 #include <winhttp.h>
 #include <pdh.h>
 #include <pdhmsg.h>
+#include <wlanapi.h>
+#include <netlistmgr.h>
 
 #include <algorithm>
 #include <array>
@@ -690,6 +692,7 @@ We love community contributions! To ensure high-quality updates, please follow t
 #include <winrt/Windows.Foundation.Collections.h>
 #include <winrt/Windows.Media.Control.h>
 #include <winrt/Windows.Storage.Streams.h>
+#include <winrt/Windows.Devices.Radios.h>
 #if __has_include(<winrt/Windows.UI.Notifications.Management.h>) && \
     __has_include(<winrt/Windows.UI.Notifications.h>)
 #define DYNAMIC_ISLAND_HAS_USER_NOTIFICATION_LISTENER 1
@@ -4207,6 +4210,475 @@ void ApplyBackdropMaterial(HWND) {
     g_layoutDirty = true;
 }
 
+// ── Bar status ───────────────────────────────────────────────────────────────
+// Everything the top bar shows on its left and right, gathered on one worker
+// thread (an MTA, so WinRT and Core Audio calls can block safely) and published
+// as a single Model. The bar repaints only when the model actually changes:
+// Publish posts kRefreshMessage to it.
+//
+// Sources and cadence (all cheap; the thread sleeps between ticks):
+//   every 250 ms  foreground app (also woken at once by EVENT_SYSTEM_FOREGROUND),
+//                 keyboard layout, volume
+//   every 1 s     battery, weather (from the weather thread's snapshot), date
+//   every 3 s     Wi-Fi / network, Bluetooth radio
+namespace BarStatus {
+
+constexpr UINT kRefreshMessage = WM_APP + 0x44B;  // posted to the bar window
+
+enum class Net { Offline, Ethernet, Wifi };
+
+struct Model {
+    std::wstring appName;
+    bool weatherValid = false;
+    int weatherCode = 0;
+    int temperature = 0;
+    int bluetooth = -1;     // -1 no radio, 0 off, 1 on
+    Net net = Net::Offline;
+    int wifiLevel = 0;      // 1..4 bars while net == Wifi
+    bool hasAudio = false;
+    int volume = 0;         // 0..100
+    bool muted = false;
+    bool hasBattery = false;
+    int battery = 0;        // 0..100
+    bool charging = false;  // on AC power
+    std::wstring layout;    // "РУС", "ENG", ...
+    std::wstring date;      // "Пт 6 нояб."
+    bool operator==(const Model&) const = default;
+};
+
+std::mutex g_mutex;  // strict leaf lock
+Model g_model;
+std::atomic<HWND> g_notifyHwnd{nullptr};
+HANDLE g_thread = nullptr;
+std::atomic<bool> g_foregroundChanged{true};
+
+Model Get() {
+    std::lock_guard lock(g_mutex);
+    return g_model;
+}
+
+void Publish(const Model& model) {
+    bool changed = false;
+    {
+        std::lock_guard lock(g_mutex);
+        if (!(g_model == model)) {
+            g_model = model;
+            changed = true;
+        }
+    }
+    if (changed) {
+        if (HWND bar = g_notifyHwnd.load()) PostMessageW(bar, kRefreshMessage, 0, 0);
+    }
+}
+
+// ---- foreground app -----------------------------------------------------------
+
+std::wstring Trim(std::wstring s) {
+    const size_t a = s.find_first_not_of(L" \t\r\n");
+    if (a == std::wstring::npos) return {};
+    const size_t b = s.find_last_not_of(L" \t\r\n");
+    return s.substr(a, b - a + 1);
+}
+
+// The file's FileDescription in the UI language ("Проводник", "Google Chrome").
+std::wstring FileDescription(const std::wstring& path) {
+    // The localised (MUI-aware) Ex variants are resolved at run time: the
+    // 32-bit MinGW import library does not have them.
+    using SizeEx_t = DWORD(WINAPI*)(DWORD, LPCWSTR, LPDWORD);
+    using InfoEx_t = BOOL(WINAPI*)(DWORD, LPCWSTR, DWORD, DWORD, LPVOID);
+    static HMODULE version = LoadLibraryExW(L"version.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+    static auto sizeEx = version ? reinterpret_cast<SizeEx_t>(GetProcAddress(version, "GetFileVersionInfoSizeExW")) : nullptr;
+    static auto infoEx = version ? reinterpret_cast<InfoEx_t>(GetProcAddress(version, "GetFileVersionInfoExW")) : nullptr;
+    if (!sizeEx || !infoEx) return {};
+
+    DWORD handle = 0;
+    const DWORD size = sizeEx(FILE_VER_GET_LOCALISED, path.c_str(), &handle);
+    if (size == 0) return {};
+    std::vector<BYTE> data(size);
+    if (!infoEx(FILE_VER_GET_LOCALISED, path.c_str(), 0, size, data.data())) return {};
+
+    std::vector<std::pair<WORD, WORD>> candidates;
+    struct LangCodePage { WORD lang; WORD codePage; };
+    LangCodePage* translations = nullptr;
+    UINT len = 0;
+    if (VerQueryValueW(data.data(), L"\\VarFileInfo\\Translation",
+                       reinterpret_cast<void**>(&translations), &len) &&
+        translations && len >= sizeof(LangCodePage)) {
+        candidates.emplace_back(translations[0].lang, translations[0].codePage);
+    }
+    candidates.emplace_back(0x0409, 1200);
+    candidates.emplace_back(0x0409, 1252);
+    for (const auto& [lang, cp] : candidates) {
+        wchar_t key[64];
+        swprintf_s(key, L"\\StringFileInfo\\%04x%04x\\FileDescription", lang, cp);
+        wchar_t* value = nullptr;
+        if (VerQueryValueW(data.data(), key, reinterpret_cast<void**>(&value), &len) && value && len > 1) {
+            std::wstring text = Trim(value);
+            if (!text.empty()) return text;
+        }
+    }
+    return {};
+}
+
+struct FrameChildSearch {
+    DWORD frame;
+    DWORD found;
+};
+
+// A named CALLBACK, not a lambda: the 32-bit build needs __stdcall here.
+BOOL CALLBACK FindFrameChild(HWND child, LPARAM lp) {
+    auto* f = reinterpret_cast<FrameChildSearch*>(lp);
+    DWORD p = 0;
+    GetWindowThreadProcessId(child, &p);
+    if (p && p != f->frame) {
+        f->found = p;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+// UWP windows are hosted by ApplicationFrameHost; the app is the child window
+// that belongs to a different process.
+DWORD AppProcessId(HWND hwnd, bool* frameWithoutApp) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    *frameWithoutApp = false;
+    wchar_t cls[64] = {};
+    GetClassNameW(hwnd, cls, ARRAYSIZE(cls));
+    if (wcscmp(cls, L"ApplicationFrameWindow") == 0) {
+        FrameChildSearch find{pid, 0};
+        EnumChildWindows(hwnd, FindFrameChild, reinterpret_cast<LPARAM>(&find));
+        if (find.found) {
+            pid = find.found;
+        } else {
+            *frameWithoutApp = true;
+        }
+    }
+    return pid;
+}
+
+// Empty when the foreground window is our own (island / bar) or unknown; the
+// caller then keeps showing the previous name, like macOS keeps the menu.
+std::wstring AppNameFor(HWND fg, std::unordered_map<std::wstring, std::wstring>& cache) {
+    if (!fg) return {};
+    bool frameWithoutApp = false;
+    const DWORD pid = AppProcessId(fg, &frameWithoutApp);
+    if (!pid || pid == GetCurrentProcessId()) return {};
+
+    auto windowTitle = [&]() {
+        wchar_t title[256] = {};
+        GetWindowTextW(fg, title, ARRAYSIZE(title));
+        return Trim(title);
+    };
+    if (frameWithoutApp) return windowTitle();
+
+    std::wstring path;
+    if (HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+        wchar_t buffer[MAX_PATH * 2] = {};
+        DWORD n = ARRAYSIZE(buffer);
+        if (QueryFullProcessImageNameW(process, 0, buffer, &n)) path.assign(buffer, n);
+        CloseHandle(process);
+    }
+    if (path.empty()) return windowTitle();
+
+    if (auto it = cache.find(path); it != cache.end()) return it->second;
+    std::wstring name = FileDescription(path);
+    if (name.empty()) {
+        const size_t slash = path.find_last_of(L"\\/");
+        name = path.substr(slash == std::wstring::npos ? 0 : slash + 1);
+        if (name.size() > 4 && _wcsicmp(name.c_str() + name.size() - 4, L".exe") == 0) {
+            name.resize(name.size() - 4);
+        }
+    }
+    if (cache.size() > 256) cache.clear();
+    cache[path] = name;
+    return name;
+}
+
+void CALLBACK ForegroundEventProc(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD) {
+    g_foregroundChanged = true;
+}
+
+// ---- keyboard layout ------------------------------------------------------------
+
+// First three letters of the language's own name, upper-cased: "русский" ->
+// "РУС", "English" -> "ENG", "Deutsch" -> "DEU" -- what the Windows tray shows.
+std::wstring LayoutLabel(HKL hkl, std::unordered_map<LANGID, std::wstring>& cache) {
+    const LANGID lang = LOWORD(reinterpret_cast<UINT_PTR>(hkl));
+    if (auto it = cache.find(lang); it != cache.end()) return it->second;
+    wchar_t locale[LOCALE_NAME_MAX_LENGTH] = {};
+    std::wstring label;
+    if (LCIDToLocaleName(MAKELCID(lang, SORT_DEFAULT), locale, ARRAYSIZE(locale), 0) > 0) {
+        wchar_t native[96] = {};
+        if (GetLocaleInfoEx(locale, LOCALE_SNATIVELANGNAME, native, ARRAYSIZE(native)) > 0) {
+            label.assign(native, std::min<size_t>(3, wcslen(native)));
+            wchar_t upper[8] = {};
+            const int n = LCMapStringEx(locale, LCMAP_UPPERCASE, label.c_str(), static_cast<int>(label.size()),
+                                        upper, ARRAYSIZE(upper), nullptr, nullptr, 0);
+            if (n > 0) label.assign(upper, n);
+        }
+    }
+    cache[lang] = label;
+    return label;
+}
+
+// ---- date -----------------------------------------------------------------------
+
+// "Пт 6 нояб." / "Fri 6 Nov". Windows' own formatter abbreviates Russian months
+// as "ноя"; the system ICU (icu.dll, Windows 10 1903+) has the CLDR forms macOS
+// uses, so it is preferred, with GetDateFormatEx as the fallback.
+struct IcuDate {
+    using Open = void* (*)(int, int, const char*, const wchar_t*, int, const wchar_t*, int, int*);
+    using Format = int (*)(const void*, double, wchar_t*, int, void*, int*);
+    using Close = void (*)(void*);
+    HMODULE dll = nullptr;
+    Format format = nullptr;
+    Close close = nullptr;
+    void* formatter = nullptr;
+    bool tried = false;
+
+    void Init() {
+        tried = true;
+        dll = LoadLibraryExW(L"icu.dll", nullptr, LOAD_LIBRARY_SEARCH_SYSTEM32);
+        if (!dll) return;
+        auto open = reinterpret_cast<Open>(GetProcAddress(dll, "udat_open"));
+        format = reinterpret_cast<Format>(GetProcAddress(dll, "udat_format"));
+        close = reinterpret_cast<Close>(GetProcAddress(dll, "udat_close"));
+        if (!open || !format || !close) return;
+        wchar_t localeW[LOCALE_NAME_MAX_LENGTH] = {};
+        GetUserDefaultLocaleName(localeW, ARRAYSIZE(localeW));
+        char locale[LOCALE_NAME_MAX_LENGTH] = {};
+        for (int i = 0; localeW[i] && i < LOCALE_NAME_MAX_LENGTH - 1; ++i) {
+            locale[i] = localeW[i] == L'-' ? '_' : static_cast<char>(localeW[i] & 0x7F);
+        }
+        int status = 0;
+        constexpr int kUdatPattern = -2;
+        formatter = open(kUdatPattern, kUdatPattern, locale, nullptr, -1, L"EEE d MMM", -1, &status);
+        if (status > 0) formatter = nullptr;
+    }
+
+    ~IcuDate() {
+        if (formatter && close) close(formatter);
+        if (dll) FreeLibrary(dll);
+    }
+
+    std::wstring Now() {
+        if (!tried) Init();
+        wchar_t buffer[64] = {};
+        if (formatter) {
+            FILETIME ft;
+            GetSystemTimeAsFileTime(&ft);
+            ULARGE_INTEGER u;
+            u.LowPart = ft.dwLowDateTime;
+            u.HighPart = ft.dwHighDateTime;
+            const double ms = static_cast<double>(u.QuadPart - 116444736000000000ULL) / 10000.0;
+            int status = 0;
+            const int n = format(formatter, ms, buffer, ARRAYSIZE(buffer) - 1, nullptr, &status);
+            if (status <= 0 && n > 0) {
+                CharUpperBuffW(buffer, 1);  // CLDR weekdays are lower-case in Russian
+                return std::wstring(buffer, std::min(n, static_cast<int>(ARRAYSIZE(buffer)) - 1));
+            }
+        }
+        if (GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, 0, nullptr, L"ddd d MMM", buffer, ARRAYSIZE(buffer),
+                            nullptr) > 0) {
+            return buffer;
+        }
+        return {};
+    }
+};
+
+// ---- network ----------------------------------------------------------------------
+
+struct NetworkProbe {
+    HANDLE wlan = nullptr;
+    ComPtr<INetworkListManager> nlm;
+
+    void Init() {
+        DWORD version = 0;
+        if (WlanOpenHandle(2, nullptr, &version, &wlan) != ERROR_SUCCESS) wlan = nullptr;
+        static const CLSID kClsidNetworkListManager = {
+            0xDCB00C01, 0x570F, 0x4A9B, {0x8D, 0x69, 0x19, 0x9F, 0xDB, 0xA5, 0x72, 0x3B}};
+        CoCreateInstance(kClsidNetworkListManager, nullptr, CLSCTX_ALL, IID_PPV_ARGS(nlm.GetAddressOf()));
+    }
+
+    ~NetworkProbe() {
+        if (wlan) WlanCloseHandle(wlan, nullptr);
+    }
+
+    void Query(Model& m) {
+        int quality = -1;  // -1: no Wi-Fi connection
+        if (wlan) {
+            WLAN_INTERFACE_INFO_LIST* list = nullptr;
+            if (WlanEnumInterfaces(wlan, nullptr, &list) == ERROR_SUCCESS && list) {
+                for (DWORD i = 0; i < list->dwNumberOfItems && quality < 0; ++i) {
+                    const WLAN_INTERFACE_INFO& info = list->InterfaceInfo[i];
+                    if (info.isState != wlan_interface_state_connected) continue;
+                    DWORD size = 0;
+                    WLAN_CONNECTION_ATTRIBUTES* conn = nullptr;
+                    if (WlanQueryInterface(wlan, &info.InterfaceGuid, wlan_intf_opcode_current_connection,
+                                           nullptr, &size, reinterpret_cast<void**>(&conn), nullptr) ==
+                            ERROR_SUCCESS && conn) {
+                        quality = static_cast<int>(conn->wlanAssociationAttributes.wlanSignalQuality);
+                        WlanFreeMemory(conn);
+                    }
+                }
+                WlanFreeMemory(list);
+            }
+        }
+        if (quality >= 0) {
+            m.net = Net::Wifi;
+            m.wifiLevel = quality >= 75 ? 4 : quality >= 50 ? 3 : quality >= 25 ? 2 : 1;
+            return;
+        }
+        m.wifiLevel = 0;
+        NLM_CONNECTIVITY connectivity = NLM_CONNECTIVITY_DISCONNECTED;
+        const bool connected = nlm && SUCCEEDED(nlm->GetConnectivity(&connectivity)) &&
+                               connectivity != NLM_CONNECTIVITY_DISCONNECTED;
+        m.net = connected ? Net::Ethernet : Net::Offline;
+    }
+};
+
+// ---- thread ------------------------------------------------------------------------
+
+DWORD WINAPI ThreadProc(void*) {
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    {
+        HWINEVENTHOOK hook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
+                                             ForegroundEventProc, 0, 0,
+                                             WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        Model model;
+        std::unordered_map<std::wstring, std::wstring> appNames;
+        std::unordered_map<LANGID, std::wstring> layoutLabels;
+        IcuDate date;
+        NetworkProbe network;
+        network.Init();
+        ComPtr<IMMDeviceEnumerator> devices;
+        CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(devices.GetAddressOf()));
+        ComPtr<IAudioEndpointVolume> endpoint;
+        winrt::Windows::Devices::Radios::Radio btRadio{nullptr};
+        double lastSecond = -1e9, lastSlow = -1e9, lastEndpoint = -1e9, lastRadioLookup = -1e9;
+        HWND lastForeground = nullptr;
+
+        for (;;) {
+            bool enabled = false;
+            bool weatherOn = false;
+            {
+                std::lock_guard lock(g_settingsMutex);
+                enabled = g_settings.topBarEnabled;
+                weatherOn = g_settings.weather;
+            }
+            const DWORD wait = MsgWaitForMultipleObjects(1, &g_stopEvent, FALSE, enabled ? 250 : 1000, QS_ALLINPUT);
+            if (wait == WAIT_OBJECT_0) break;
+            MSG msg;
+            while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+                TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            if (!enabled) continue;
+            const double now = NowSeconds();
+
+            // Foreground app and its keyboard layout.
+            HWND fg = GetForegroundWindow();
+            if (g_foregroundChanged.exchange(false) || fg != lastForeground) {
+                lastForeground = fg;
+                std::wstring name = AppNameFor(fg, appNames);
+                if (!name.empty()) model.appName = std::move(name);
+            }
+            if (fg) {
+                const DWORD tid = GetWindowThreadProcessId(fg, nullptr);
+                if (HKL hkl = GetKeyboardLayout(tid)) model.layout = LayoutLabel(hkl, layoutLabels);
+            }
+
+            // Volume of the default output device (re-resolved every 3 s so a
+            // device switch is picked up).
+            if (devices && (!endpoint || now - lastEndpoint > 3.0)) {
+                lastEndpoint = now;
+                endpoint.Reset();
+                ComPtr<IMMDevice> device;
+                if (SUCCEEDED(devices->GetDefaultAudioEndpoint(eRender, eMultimedia, device.GetAddressOf()))) {
+                    device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
+                                     reinterpret_cast<void**>(endpoint.GetAddressOf()));
+                }
+            }
+            float level = 0.0f;
+            BOOL mute = FALSE;
+            model.hasAudio = endpoint && SUCCEEDED(endpoint->GetMasterVolumeLevelScalar(&level)) &&
+                             SUCCEEDED(endpoint->GetMute(&mute));
+            if (model.hasAudio) {
+                model.volume = static_cast<int>(std::lround(level * 100.0f));
+                model.muted = mute != FALSE;
+            }
+
+            if (now - lastSecond >= 1.0) {
+                lastSecond = now;
+                SYSTEM_POWER_STATUS power = {};
+                if (GetSystemPowerStatus(&power)) {
+                    model.hasBattery = (power.BatteryFlag & 128) == 0 && power.BatteryLifePercent != 255;
+                    model.battery = model.hasBattery ? power.BatteryLifePercent : 0;
+                    model.charging = power.ACLineStatus == 1;
+                }
+                {
+                    std::lock_guard lock(g_stateMutex);
+                    model.weatherValid = weatherOn && g_state.weather.hasData &&
+                                         (now - g_state.weather.lastUpdated < 3600.0);
+                    model.weatherCode = g_state.weather.weatherCode;
+                    model.temperature = static_cast<int>(std::lround(g_state.weather.temperature));
+                }
+                model.date = date.Now();
+            }
+
+            if (now - lastSlow >= 3.0) {
+                lastSlow = now;
+                network.Query(model);
+                if (!btRadio && now - lastRadioLookup > 30.0) {
+                    lastRadioLookup = now;
+                    try {
+                        using namespace winrt::Windows::Devices::Radios;
+                        for (const Radio& radio : Radio::GetRadiosAsync().get()) {
+                            if (radio.Kind() == RadioKind::Bluetooth) {
+                                btRadio = radio;
+                                break;
+                            }
+                        }
+                    } catch (...) {
+                    }
+                }
+                try {
+                    model.bluetooth = btRadio
+                        ? (btRadio.State() == winrt::Windows::Devices::Radios::RadioState::On ? 1 : 0)
+                        : -1;
+                } catch (...) {
+                    btRadio = nullptr;
+                    model.bluetooth = -1;
+                }
+            }
+
+            Publish(model);
+        }
+        if (hook) UnhookWinEvent(hook);
+    }
+    winrt::uninit_apartment();
+    return 0;
+}
+
+}  // namespace BarStatus
+
+// Paints the bar's side content (defined further down, after the weather helpers).
+namespace BarContent {
+enum Item { kLogo, kApp, kWeather, kBluetooth, kNetwork, kVolume, kBattery, kLayout, kDate, kItemCount };
+struct Metrics {
+    bool valid = false;
+    float leftEnd = 0.0f;     // right edge of the left group, before sliding (client px)
+    float rightStart = 0.0f;  // left edge of the right group, before sliding
+    bool present[kItemCount] = {};
+    D2D1_RECT_F rects[kItemCount] = {};  // as drawn, including the slide
+};
+void Paint(ID2D1RenderTarget* rt, ID2D1Factory* factory, D2D1_SIZE_F size, const Settings& s,
+           const BarStatus::Model& model, bool solid, float leftShift, float rightShift, Metrics* out);
+void ReleaseTargetResources();
+void ReleaseAll();
+}  // namespace BarContent
+
 // ── Top bar (AppBar) ─────────────────────────────────────────────────────────
 // A full-width strip along the top edge of one monitor, registered with the shell
 // as an application desktop toolbar (SHAppBarMessage, ABE_TOP). Windows takes it
@@ -4236,15 +4708,8 @@ constexpr float kAutoHeight = 40.0f;
 // Height of the resting island, which is centred vertically in the bar. Taller
 // collapsed pills (alerts) keep the same top edge and grow down past the bar.
 constexpr float kPillRestHeight = 36.0f;
-// Width kept clear around the island for future side content, content px.
-constexpr float kCenterReserve = 420.0f;
-
-// Client-area zones, px. Nothing is drawn in them yet.
-struct Layout {
-    D2D1_RECT_F left = {};
-    D2D1_RECT_F center = {};
-    D2D1_RECT_F right = {};
-};
+// Clearance between the notch and the side content, content px.
+constexpr float kNotchClearance = 16.0f;
 
 HWND g_bar = nullptr;
 HWND g_island = nullptr;
@@ -4257,7 +4722,6 @@ HMONITOR g_monitor = nullptr;
 RECT g_monitorRect = {};
 int g_heightPx = 0;
 float g_scale = 1.0f;
-int g_offsetX = 0;
 bool g_solid = false;
 D2D1_COLOR_F g_fill = D2D1::ColorF(0.031f, 0.031f, 0.039f, 1.0f);
 int g_accentState = -1;
@@ -4265,6 +4729,12 @@ DWORD g_accentColor = 0;
 
 ComPtr<ID2D1Factory> g_factory;
 ComPtr<ID2D1HwndRenderTarget> g_target;
+
+// Side content: where it was laid out last, and how far each group is slid away
+// from a notch that has grown into it (left group: <= 0, right group: >= 0).
+BarContent::Metrics g_metrics;
+SpringValue g_leftShift;
+SpringValue g_rightShift;
 
 // The bar's screen rect as the shell granted it. Strict leaf lock.
 std::mutex g_anchorMutex;
@@ -4290,25 +4760,6 @@ bool GetAnchorRect(RECT* out) {
     if (!g_anchorValid) return false;
     *out = g_anchorRect;
     return true;
-}
-
-Layout ComputeLayout() {
-    Layout layout;
-    if (!g_bar) return layout;
-    RECT rc = {};
-    GetClientRect(g_bar, &rc);
-    const float w = static_cast<float>(rc.right - rc.left);
-    const float h = static_cast<float>(rc.bottom - rc.top);
-    const float reserve = std::min(w, kCenterReserve * g_scale);
-    // Centred on where a top-centre island sits; other positions will need their
-    // own split once side content exists.
-    const float mid = w * 0.5f + static_cast<float>(g_offsetX);
-    const float cl = Clamp(mid - reserve * 0.5f, 0.0f, w);
-    const float cr = Clamp(mid + reserve * 0.5f, 0.0f, w);
-    layout.left = D2D1::RectF(0.0f, 0.0f, cl, h);
-    layout.center = D2D1::RectF(cl, 0.0f, cr, h);
-    layout.right = D2D1::RectF(cr, 0.0f, w, h);
-    return layout;
 }
 
 bool EnsureTarget() {
@@ -4341,12 +4792,12 @@ void Paint() {
         g_target->SetTransform(D2D1::Matrix3x2F::Identity());
         g_target->Clear(g_solid ? g_fill : D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
 
-        // Side content (active app, tray icons, clock) will be drawn here into
-        // layout.left / layout.right. The island covers layout.center.
-        const Layout layout = ComputeLayout();
-        (void)layout;
+        const Settings settings = GetSettingsCopy();
+        BarContent::Paint(g_target.Get(), g_factory.Get(), g_target->GetSize(), settings, BarStatus::Get(),
+                          g_solid, g_leftShift.value, g_rightShift.value, &g_metrics);
 
         if (g_target->EndDraw() == static_cast<HRESULT>(D2DERR_RECREATE_TARGET)) {
+            BarContent::ReleaseTargetResources();
             g_target.Reset();
             InvalidateRect(g_bar, nullptr, FALSE);
         }
@@ -4445,6 +4896,16 @@ void SetPolledFullscreen(bool on) {
     UpdateFullscreenVisibility();
 }
 
+// The Windows logo opens Start, like the Start button: a Win key tap.
+void OpenStartMenu() {
+    INPUT input[2] = {};
+    input[0].type = INPUT_KEYBOARD;
+    input[0].ki.wVk = VK_LWIN;
+    input[1] = input[0];
+    input[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    SendInput(2, input, sizeof(INPUT));
+}
+
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_MOUSEACTIVATE:
@@ -4474,6 +4935,19 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 SHAppBarMessage(ABM_WINDOWPOSCHANGED, &abd);
             }
             break;
+        case BarStatus::kRefreshMessage:
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        case WM_LBUTTONUP: {
+            const D2D1_POINT_2F pt = D2D1::Point2F(static_cast<float>(GET_X_LPARAM(lParam)),
+                                                   static_cast<float>(GET_Y_LPARAM(lParam)));
+            auto hit = [&](BarContent::Item item) {
+                const D2D1_RECT_F& r = g_metrics.rects[item];
+                return g_metrics.present[item] && pt.x >= r.left && pt.x < r.right;
+            };
+            if (hit(BarContent::kLogo)) OpenStartMenu();
+            return 0;
+        }
         case WM_DPICHANGED:
         case WM_DISPLAYCHANGE:
             // Monitor rect or scale may have changed; Apply re-reads both. The
@@ -4520,6 +4994,7 @@ bool Create() {
     if (DwmBackdrop::Available()) {
         DwmBackdrop::DisableTransitions(g_bar);
     }
+    BarStatus::g_notifyHwnd = g_bar;
     // Square corners on Windows 11 (DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_DONOTROUND).
     // Fails harmlessly on Windows 10.
     const DWORD cornerPreference = 1;
@@ -4555,8 +5030,13 @@ void Unregister() {
 // Releases the reserved space and destroys the bar. Safe to call repeatedly.
 void Destroy() {
     Unregister();
+    BarStatus::g_notifyHwnd = nullptr;
+    BarContent::ReleaseAll();
     g_target.Reset();
     g_factory.Reset();
+    g_metrics = {};
+    g_leftShift.Reset(0.0f);
+    g_rightShift.Reset(0.0f);
     if (g_bar) {
         DestroyWindow(g_bar);
         g_bar = nullptr;
@@ -4603,7 +5083,6 @@ void Apply(HWND island) {
     g_monitorRect = mi.rcMonitor;
     g_heightPx = heightPx;
     g_scale = s.sizeScale;
-    g_offsetX = s.offsetX;
     if (geometryChanged) {
         UpdatePosition(true);
     }
@@ -4624,6 +5103,34 @@ void OnTaskbarCreated(HWND island) {
     g_registeredHwnd = nullptr;
     g_monitor = nullptr;  // forces ABM_SETPOS in Apply
     Apply(island);
+}
+
+// Called every render-loop iteration with the island's pill rect (screen px).
+// When the notch grows into the side content, that group slides away from it on
+// a spring with the island's own feel, and slides back when the notch shrinks.
+// Repaints only while a group is actually moving.
+void Tick(float dt, float stiffnessMult, float dampingMult, const RECT& notch, bool notchVisible) {
+    if (!g_bar || g_fullscreenHidden) return;
+    float targetLeft = 0.0f;
+    float targetRight = 0.0f;
+    RECT bar = {};
+    if (notchVisible && g_metrics.valid && GetAnchorRect(&bar)) {
+        const float clearance = kNotchClearance * g_scale;
+        const float notchLeft = static_cast<float>(notch.left - bar.left);
+        const float notchRight = static_cast<float>(notch.right - bar.left);
+        targetLeft = std::min(0.0f, (notchLeft - clearance) - g_metrics.leftEnd);
+        targetRight = std::max(0.0f, (notchRight + clearance) - g_metrics.rightStart);
+    }
+    g_leftShift.target = targetLeft;
+    g_rightShift.target = targetRight;
+    const float beforeLeft = g_leftShift.value;
+    const float beforeRight = g_rightShift.value;
+    g_leftShift.Step(dt, 280.0f * stiffnessMult, 24.0f * dampingMult);
+    g_rightShift.Step(dt, 280.0f * stiffnessMult, 24.0f * dampingMult);
+    if (std::fabs(g_leftShift.value - beforeLeft) > 0.05f ||
+        std::fabs(g_rightShift.value - beforeRight) > 0.05f) {
+        InvalidateRect(g_bar, nullptr, FALSE);
+    }
 }
 
 // Screen y of the resting pill's top edge inside the bar.
@@ -13393,6 +13900,368 @@ WeatherVisual WeatherVisualFromCode(int code) {
             return WeatherVisual::Unknown;
     }
 }
+
+// ── Bar content ──────────────────────────────────────────────────────────────
+// The top bar's two groups, laid out like the macOS menu bar:
+//   left:  Windows logo · active app (bold) · weather
+//   right: Bluetooth · network · volume · battery % · keyboard layout · date
+// Icons come from the system's own icon font -- Segoe Fluent Icons on Windows 11,
+// Segoe MDL2 Assets otherwise -- using the glyphs the Windows 11 tray shows for
+// each state. Neither font has the Windows logo or weather symbols, so those are
+// drawn as simple monochrome vectors, in the spirit of the menu bar's SF Symbols.
+// Painted by TopBar::Paint, i.e. only when the model, theme or size changes, or
+// while a group slides.
+namespace BarContent {
+
+// Layout in content px (multiplied by sizeScale).
+constexpr float kEdgePad = 14.0f;
+constexpr float kItemGap = 16.0f;
+constexpr float kTextSize = 13.0f;
+constexpr float kIconSize = 15.0f;
+constexpr float kIconTextGap = 5.0f;
+constexpr float kLogoSize = 13.0f;
+constexpr float kLogoGap = 20.0f;      // logo -> app name, a little wider like macOS
+constexpr float kAppMaxWidth = 280.0f;
+constexpr float kHitPad = 6.0f;        // click slop around each item
+
+// Segoe Fluent Icons / MDL2 glyphs, as used by the Windows 11 tray.
+constexpr wchar_t kGlyphBluetooth[] = L"";
+constexpr wchar_t kGlyphEthernet[] = L"";
+constexpr wchar_t kGlyphOffline[] = L"";
+constexpr wchar_t kGlyphWifi[4][2] = {L"", L"", L"", L""};  // 1..4 bars
+constexpr wchar_t kGlyphMute[] = L"";
+constexpr wchar_t kGlyphVolume[4][2] = {L"", L"", L"", L""};
+constexpr wchar_t kGlyphThermometer[] = L"";
+constexpr wchar_t kBatteryBase = 0xEBA0;          // Battery0..Battery10
+constexpr wchar_t kBatteryChargingBase = 0xEBAB;  // BatteryCharging0..10
+
+struct Resources {
+    ComPtr<IDWriteFactory> dwrite;
+    ComPtr<IDWriteTextFormat> text;
+    ComPtr<IDWriteTextFormat> bold;
+    ComPtr<IDWriteTextFormat> icons;
+    float scale = 0.0f;
+    ComPtr<ID2D1SolidColorBrush> brush;  // bound to the bar's render target
+};
+Resources g_res;
+
+void ReleaseTargetResources() {
+    g_res.brush.Reset();
+}
+
+void ReleaseAll() {
+    g_res = Resources{};
+}
+
+bool HasFamily(IDWriteFactory* factory, const wchar_t* name) {
+    ComPtr<IDWriteFontCollection> fonts;
+    if (FAILED(factory->GetSystemFontCollection(fonts.GetAddressOf(), FALSE))) return false;
+    UINT32 index = 0;
+    BOOL exists = FALSE;
+    return SUCCEEDED(fonts->FindFamilyName(name, &index, &exists)) && exists;
+}
+
+bool EnsureFormats(float scale) {
+    if (!g_res.dwrite &&
+        FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                                   reinterpret_cast<IUnknown**>(g_res.dwrite.GetAddressOf())))) {
+        return false;
+    }
+    if (g_res.text && std::fabs(g_res.scale - scale) < 0.001f) return true;
+    g_res.text.Reset();
+    g_res.bold.Reset();
+    g_res.icons.Reset();
+
+    IDWriteFactory* dw = g_res.dwrite.Get();
+    const wchar_t* textFamily = HasFamily(dw, L"Segoe UI Variable Text") ? L"Segoe UI Variable Text" : L"Segoe UI";
+    const wchar_t* iconFamily = HasFamily(dw, L"Segoe Fluent Icons") ? L"Segoe Fluent Icons" : L"Segoe MDL2 Assets";
+    auto make = [&](const wchar_t* family, DWRITE_FONT_WEIGHT weight, float size,
+                    ComPtr<IDWriteTextFormat>& out) {
+        if (FAILED(dw->CreateTextFormat(family, nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
+                                        DWRITE_FONT_STRETCH_NORMAL, size, L"", out.GetAddressOf()))) {
+            return false;
+        }
+        out->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        out->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        return true;
+    };
+    if (!make(textFamily, DWRITE_FONT_WEIGHT_NORMAL, kTextSize * scale, g_res.text) ||
+        !make(textFamily, DWRITE_FONT_WEIGHT_BOLD, kTextSize * scale, g_res.bold) ||
+        !make(iconFamily, DWRITE_FONT_WEIGHT_NORMAL, kIconSize * scale, g_res.icons)) {
+        g_res.text.Reset();
+        g_res.bold.Reset();
+        g_res.icons.Reset();
+        return false;
+    }
+    // A long app name ends in an ellipsis instead of running toward the notch.
+    const DWRITE_TRIMMING trimming = {DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+    ComPtr<IDWriteInlineObject> ellipsis;
+    if (SUCCEEDED(dw->CreateEllipsisTrimmingSign(g_res.bold.Get(), ellipsis.GetAddressOf()))) {
+        g_res.bold->SetTrimming(&trimming, ellipsis.Get());
+    }
+    g_res.scale = scale;
+    return true;
+}
+
+float TextWidth(const std::wstring& text, IDWriteTextFormat* format) {
+    if (text.empty()) return 0.0f;
+    ComPtr<IDWriteTextLayout> layout;
+    if (FAILED(g_res.dwrite->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()), format, 10000.0f,
+                                              100.0f, layout.GetAddressOf()))) {
+        return 0.0f;
+    }
+    DWRITE_TEXT_METRICS metrics = {};
+    if (FAILED(layout->GetMetrics(&metrics))) return 0.0f;
+    return std::ceil(metrics.widthIncludingTrailingWhitespace);
+}
+
+// Text vertically centred in the bar, starting at x.
+void DrawTextAt(ID2D1RenderTarget* rt, const std::wstring& text, IDWriteTextFormat* format, float x,
+                float width, float height, ID2D1Brush* brush) {
+    rt->DrawTextW(text.c_str(), static_cast<UINT32>(text.size()), format,
+                  D2D1::RectF(x, 0.0f, x + width + 1.0f, height), brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
+}
+
+// Windows 11 logo: four squares.
+void DrawWindowsLogo(ID2D1RenderTarget* rt, float x, float cy, float size, ID2D1Brush* brush) {
+    const float gap = std::max(1.0f, std::round(size * 0.09f));
+    const float cell = (size - gap) * 0.5f;
+    const float top = cy - size * 0.5f;
+    for (int row = 0; row < 2; ++row) {
+        for (int col = 0; col < 2; ++col) {
+            const float l = x + col * (cell + gap);
+            const float t = top + row * (cell + gap);
+            rt->FillRectangle(D2D1::RectF(l, t, l + cell, t + cell), brush);
+        }
+    }
+}
+
+void FillCloud(ID2D1RenderTarget* rt, D2D1_POINT_2F c, float s, ID2D1Brush* brush) {
+    const D2D1_RECT_F base = D2D1::RectF(c.x - 0.44f * s, c.y + 0.02f * s, c.x + 0.44f * s, c.y + 0.21f * s);
+    rt->FillRoundedRectangle(D2D1::RoundedRect(base, 0.10f * s, 0.10f * s), brush);
+    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(c.x - 0.24f * s, c.y + 0.02f * s), 0.18f * s, 0.18f * s), brush);
+    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(c.x - 0.01f * s, c.y - 0.10f * s), 0.24f * s, 0.24f * s), brush);
+    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(c.x + 0.25f * s, c.y + 0.03f * s), 0.17f * s, 0.17f * s), brush);
+}
+
+void DrawSun(ID2D1RenderTarget* rt, D2D1_POINT_2F c, float s, ID2D1Brush* brush) {
+    rt->FillEllipse(D2D1::Ellipse(c, 0.22f * s, 0.22f * s), brush);
+    const float inner = 0.32f * s;
+    const float outer = 0.46f * s;
+    for (int i = 0; i < 8; ++i) {
+        const float a = static_cast<float>(i) * 3.14159265f / 4.0f;
+        rt->DrawLine(D2D1::Point2F(c.x + std::cos(a) * inner, c.y + std::sin(a) * inner),
+                     D2D1::Point2F(c.x + std::cos(a) * outer, c.y + std::sin(a) * outer), brush,
+                     std::max(1.0f, 0.07f * s));
+    }
+}
+
+// Monochrome weather symbol in a box of size s centred on c. `cut` is the bar's
+// colour, used to separate overlapping shapes on a solid bar.
+void DrawWeather(ID2D1RenderTarget* rt, ID2D1Factory* factory, D2D1_POINT_2F c, float s, WeatherVisual visual,
+                 ID2D1SolidColorBrush* brush, const D2D1_COLOR_F& fg, const D2D1_COLOR_F& cut, bool solid,
+                 IDWriteTextFormat* icons) {
+    brush->SetColor(fg);
+    const float stroke = std::max(1.0f, 0.075f * s);
+    const D2D1_POINT_2F raised = D2D1::Point2F(c.x, c.y - 0.14f * s);
+    switch (visual) {
+        case WeatherVisual::Clear:
+            DrawSun(rt, c, s, brush);
+            break;
+        case WeatherVisual::PartlyCloudy: {
+            DrawSun(rt, D2D1::Point2F(c.x + 0.16f * s, c.y - 0.16f * s), s * 0.72f, brush);
+            const D2D1_POINT_2F cloud = D2D1::Point2F(c.x - 0.06f * s, c.y + 0.08f * s);
+            if (solid) {  // a thin gap between sun and cloud, like the SF Symbol
+                brush->SetColor(cut);
+                FillCloud(rt, cloud, s * 1.12f, brush);
+                brush->SetColor(fg);
+            }
+            FillCloud(rt, cloud, s * 0.92f, brush);
+            break;
+        }
+        case WeatherVisual::Cloudy:
+            FillCloud(rt, c, s, brush);
+            break;
+        case WeatherVisual::Fog:
+            FillCloud(rt, raised, s * 0.9f, brush);
+            for (int i = 0; i < 2; ++i) {
+                const float y = c.y + (0.24f + 0.16f * i) * s;
+                rt->DrawLine(D2D1::Point2F(c.x - 0.36f * s, y), D2D1::Point2F(c.x + 0.36f * s, y), brush, stroke);
+            }
+            break;
+        case WeatherVisual::Rain:
+            FillCloud(rt, raised, s * 0.9f, brush);
+            for (int i = -1; i <= 1; ++i) {
+                const float x = c.x + 0.22f * s * i;
+                rt->DrawLine(D2D1::Point2F(x + 0.05f * s, c.y + 0.22f * s),
+                             D2D1::Point2F(x - 0.05f * s, c.y + 0.44f * s), brush, stroke);
+            }
+            break;
+        case WeatherVisual::Snow:
+            FillCloud(rt, raised, s * 0.9f, brush);
+            for (int i = -1; i <= 1; ++i) {
+                const float r = 0.055f * s;
+                rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(c.x + 0.22f * s * i, c.y + 0.32f * s), r, r),
+                                brush);
+            }
+            break;
+        case WeatherVisual::Storm: {
+            FillCloud(rt, raised, s * 0.9f, brush);
+            ComPtr<ID2D1PathGeometry> bolt;
+            ComPtr<ID2D1GeometrySink> sink;
+            if (SUCCEEDED(factory->CreatePathGeometry(bolt.GetAddressOf())) &&
+                SUCCEEDED(bolt->Open(sink.GetAddressOf()))) {
+                const float y0 = c.y + 0.12f * s;
+                sink->BeginFigure(D2D1::Point2F(c.x + 0.06f * s, y0), D2D1_FIGURE_BEGIN_FILLED);
+                sink->AddLine(D2D1::Point2F(c.x - 0.10f * s, y0 + 0.22f * s));
+                sink->AddLine(D2D1::Point2F(c.x + 0.00f * s, y0 + 0.22f * s));
+                sink->AddLine(D2D1::Point2F(c.x - 0.06f * s, y0 + 0.40f * s));
+                sink->AddLine(D2D1::Point2F(c.x + 0.13f * s, y0 + 0.14f * s));
+                sink->AddLine(D2D1::Point2F(c.x + 0.03f * s, y0 + 0.14f * s));
+                sink->AddLine(D2D1::Point2F(c.x + 0.10f * s, y0));
+                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+                sink->Close();
+                rt->FillGeometry(bolt.Get(), brush);
+            }
+            break;
+        }
+        case WeatherVisual::Unknown:
+        default: {
+            const std::wstring glyph = kGlyphThermometer;
+            rt->DrawTextW(glyph.c_str(), 1, icons, D2D1::RectF(c.x - s, c.y - s, c.x + s, c.y + s), brush,
+                          D2D1_DRAW_TEXT_OPTIONS_NONE);
+            break;
+        }
+    }
+}
+
+const wchar_t* NetworkGlyph(const BarStatus::Model& m) {
+    switch (m.net) {
+        case BarStatus::Net::Wifi: return kGlyphWifi[std::clamp(m.wifiLevel, 1, 4) - 1];
+        case BarStatus::Net::Ethernet: return kGlyphEthernet;
+        case BarStatus::Net::Offline:
+        default: return kGlyphOffline;
+    }
+}
+
+const wchar_t* VolumeGlyph(const BarStatus::Model& m) {
+    if (m.muted) return kGlyphMute;
+    if (m.volume <= 0) return kGlyphVolume[0];
+    if (m.volume < 34) return kGlyphVolume[1];
+    if (m.volume < 67) return kGlyphVolume[2];
+    return kGlyphVolume[3];
+}
+
+void Paint(ID2D1RenderTarget* rt, ID2D1Factory* factory, D2D1_SIZE_F size, const Settings& s,
+           const BarStatus::Model& model, bool solid, float leftShift, float rightShift, Metrics* out) {
+    *out = Metrics{};
+    const float k = std::max(0.05f, s.sizeScale);
+    if (!EnsureFormats(k)) return;
+    if (!g_res.brush &&
+        FAILED(rt->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f), g_res.brush.GetAddressOf()))) {
+        return;
+    }
+    ID2D1SolidColorBrush* brush = g_res.brush.Get();
+    IDWriteTextFormat* text = g_res.text.Get();
+    IDWriteTextFormat* bold = g_res.bold.Get();
+    IDWriteTextFormat* icons = g_res.icons.Get();
+
+    const float width = size.width;
+    const float height = size.height;
+    const float cy = height * 0.5f;
+    D2D1_COLOR_F fg = s.textPrimaryColor;
+    fg.a = 1.0f;
+    D2D1_COLOR_F dim = fg;
+    dim.a = 0.4f;
+    D2D1_COLOR_F cut = s.pillBgColor;
+    cut.a = 1.0f;
+    const float gap = kItemGap * k;
+    const float hitPad = kHitPad * k;
+
+    D2D1_MATRIX_3X2_F base;
+    rt->GetTransform(&base);
+    auto record = [&](Item item, float left, float right, float shift) {
+        out->present[item] = true;
+        out->rects[item] = D2D1::RectF(left - hitPad + shift, 0.0f, right + hitPad + shift, height);
+    };
+
+    // ── Left group, laid out from the left edge ─────────────────────────────
+    rt->SetTransform(D2D1::Matrix3x2F::Translation(leftShift, 0.0f) * base);
+    float x = kEdgePad * k;
+    brush->SetColor(fg);
+    const float logo = kLogoSize * k;
+    DrawWindowsLogo(rt, x, cy, logo, brush);
+    record(kLogo, x, x + logo, leftShift);
+    x += logo + kLogoGap * k;
+
+    if (!model.appName.empty()) {
+        const float w = std::min(TextWidth(model.appName, bold), kAppMaxWidth * k);
+        DrawTextAt(rt, model.appName, bold, x, w, height, brush);
+        record(kApp, x, x + w, leftShift);
+        x += w + gap;
+    }
+    if (model.weatherValid) {
+        const float icon = kIconSize * k;
+        DrawWeather(rt, factory, D2D1::Point2F(x + icon * 0.5f, cy), icon * 1.15f,
+                    WeatherVisualFromCode(model.weatherCode), brush, fg, cut, solid, icons);
+        brush->SetColor(fg);
+        const std::wstring temp = std::to_wstring(model.temperature) + L"°";
+        const float tw = TextWidth(temp, text);
+        const float tx = x + icon + kIconTextGap * k;
+        DrawTextAt(rt, temp, text, tx, tw, height, brush);
+        record(kWeather, x, tx + tw, leftShift);
+        x = tx + tw + gap;
+    }
+    out->leftEnd = x - gap;
+
+    // ── Right group, laid out from the right edge ───────────────────────────
+    rt->SetTransform(D2D1::Matrix3x2F::Translation(rightShift, 0.0f) * base);
+    float r = width - kEdgePad * k;
+    auto placeText = [&](Item item, const std::wstring& label) {
+        const float w = TextWidth(label, text);
+        r -= w;
+        brush->SetColor(fg);
+        DrawTextAt(rt, label, text, r, w, height, brush);
+        record(item, r, r + w, rightShift);
+        r -= gap;
+    };
+    auto placeIcon = [&](Item item, const wchar_t* glyph, const D2D1_COLOR_F& color) {
+        const std::wstring g = glyph;
+        const float w = TextWidth(g, icons);
+        r -= w;
+        brush->SetColor(color);
+        DrawTextAt(rt, g, icons, r, w, height, brush);
+        record(item, r, r + w, rightShift);
+        r -= gap;
+    };
+
+    if (!model.date.empty()) placeText(kDate, model.date);
+    if (!model.layout.empty()) placeText(kLayout, model.layout);
+    if (model.hasBattery) {
+        const std::wstring pct = std::to_wstring(model.battery) + L"%";
+        const int level = std::clamp(static_cast<int>(std::lround(model.battery / 10.0)), 0, 10);
+        const std::wstring glyph(1, static_cast<wchar_t>((model.charging ? kBatteryChargingBase : kBatteryBase) + level));
+        const float tw = TextWidth(pct, text);
+        const float iw = TextWidth(glyph, icons);
+        const float right = r;
+        r -= tw;
+        brush->SetColor(fg);
+        DrawTextAt(rt, pct, text, r, tw, height, brush);
+        r -= kIconTextGap * k + iw;
+        DrawTextAt(rt, glyph, icons, r, iw, height, brush);
+        record(kBattery, r, right, rightShift);
+        r -= gap;
+    }
+    if (model.hasAudio) placeIcon(kVolume, VolumeGlyph(model), fg);
+    placeIcon(kNetwork, NetworkGlyph(model), fg);
+    if (model.bluetooth >= 0) placeIcon(kBluetooth, kGlyphBluetooth, model.bluetooth ? fg : dim);
+    out->rightStart = r + gap;
+
+    rt->SetTransform(base);
+    out->valid = true;
+}
+
+}  // namespace BarContent
 
 // Cache for DrawKaraokeLetterPop: the layout and per-cluster hit rects only
 // depend on the active lyric line's text/format/box size, never on time, so
@@ -25822,6 +26691,10 @@ DWORD WINAPI RenderThreadProc(void*) {
 
         nudgeSpring.Step(dt * speed, 280.0f * styleStiffnessMult, 24.0f * styleDampingMult);
 
+        // Top bar: side content slides away from a notch that grows into it.
+        TopBar::Tick(dt * speed, styleStiffnessMult, styleDampingMult, pillRect,
+                     widthSpring.value > 1.0f && heightSpring.value > 1.0f && IsWindowVisible(hwnd));
+
         // Tracks the live level while the flyout is closed, so opening it doesn't sweep from a stale value.
         if (snapshot.volume.active) {
             volumeBarSpring.target = static_cast<float>(snapshot.volume.percent);
@@ -26282,6 +27155,7 @@ bool StartThreads() {
     g_notificationThread = CreateThread(nullptr, 0, NotificationThreadProc, nullptr, 0, nullptr);
 #endif
     g_bluetoothThread = CreateThread(nullptr, 0, BluetoothThreadProc, nullptr, 0, nullptr);
+    BarStatus::g_thread = CreateThread(nullptr, 0, BarStatus::ThreadProc, nullptr, 0, nullptr);
     SubscribeDndNotification();
 
     return true;
@@ -26299,7 +27173,7 @@ void StopThreads() {
         SetEvent(g_stopEvent);
     }
 
-    HANDLE handles[] = {g_renderThread, g_mediaThread, g_audioThread, g_weatherThread, g_lyricsThread, g_notificationThread, g_keyboardThread, g_mouseThread, g_bluetoothThread};
+    HANDLE handles[] = {g_renderThread, g_mediaThread, g_audioThread, g_weatherThread, g_lyricsThread, g_notificationThread, g_keyboardThread, g_mouseThread, g_bluetoothThread, BarStatus::g_thread};
     for (HANDLE handle : handles) {
         if (handle) {
             WaitForSingleObject(handle, 3000);
@@ -26318,6 +27192,7 @@ void StopThreads() {
     g_mouseThread = nullptr;
     g_mouseThreadId = 0;
     g_bluetoothThread = nullptr;
+    BarStatus::g_thread = nullptr;
 
     if (g_stopEvent) {
         CloseHandle(g_stopEvent);
