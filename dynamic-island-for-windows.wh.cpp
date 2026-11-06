@@ -122,16 +122,13 @@ We love community contributions! To ensure high-quality updates, please follow t
     $description: Shows a full-width bar along the top edge of the island's monitor and reserves that space, so maximised windows stop below it. The island sits in the middle of the bar. While the bar is on, the island always uses a top position, and "Follow Mouse" falls back to the primary monitor.
   - Material: solid
     $name: Bar material
-    $description: Acrylic needs Windows "Transparency effects" turned on; without them, or on Windows older than 10 1803, the bar uses the solid theme colour.
+    $description: Solid is the black bar of a MacBook with a notch. Acrylic is the translucent bar; it needs Windows "Transparency effects" turned on, otherwise (or on Windows older than 10 1803) the bar is solid.
     $options:
-      - acrylic: Acrylic (translucent, like the macOS menu bar)
-      - solid: Solid theme colour
+      - solid: Solid (black)
+      - acrylic: Acrylic (translucent)
   - Height: 0
     $name: Bar height
-    $description: Height in pixels at 100% size scale; it grows with Size scale and DPI just like the island. 0 = automatic (fits the resting island).
-  - TintOpacity: 50
-    $name: Acrylic tint (%)
-    $description: How strongly the theme colour tints the acrylic bar, from 0 (clear) to 100 (almost opaque).
+    $description: Height in pixels at 100% size scale; it grows with Size scale and DPI just like the island. 0 = automatic (32, the design's bar height).
   $name: Top bar
 - Appearance:
   - Position: top-center
@@ -651,6 +648,7 @@ We love community contributions! To ensure high-quality updates, please follow t
 #include <dbt.h>
 #include <d2d1.h>
 #include <dwrite.h>
+#include <dwrite_1.h>
 #include <wincodec.h>
 #include <shcore.h>
 #include <windowsx.h>
@@ -1233,7 +1231,6 @@ struct Settings {
     bool topBarEnabled = true;
     bool topBarSolid = false;       // false = acrylic
     int topBarHeight = 0;           // content px before sizeScale; 0 = automatic
-    float topBarTint = 0.5f;        // acrylic tint opacity, 0..1
 
     Position position = Position::TopCenter;
     int targetMonitor = 0;
@@ -2228,6 +2225,7 @@ const wchar_t* Loc(const wchar_t* english) {
     // Order: en, fr, es, de, pt, it, ru, tr, hi, zh, ja, ko
     static const Row kRows[] = {
         {L"Media", {nullptr, L"Média", L"Multimedia", L"Medien", L"Mídia", L"Media", L"Медиа", L"Medya", L"मीडिया", L"媒体", L"メディア", L"미디어"}},
+        {L"now", {nullptr, L"maintenant", L"ahora", L"jetzt", L"agora", L"ora", L"сейчас", L"şimdi", L"अभी", L"现在", L"今", L"지금"}},
         {L"Calendar", {nullptr, L"Calendrier", L"Calendario", L"Kalender", L"Calendário", L"Calendario", L"Календарь", L"Takvim", L"कैलेंडर", L"日历", L"カレンダー", L"캘린더"}},
         {L"Weather", {nullptr, L"Météo", L"Tiempo", L"Wetter", L"Tempo", L"Meteo", L"Погода", L"Hava", L"मौसम", L"天气", L"天気", L"날씨"}},
         {L"Hardware Monitor", {nullptr, L"Moniteur matériel", L"Monitor de hardware", L"Hardware-Monitor", L"Monitor de hardware", L"Monitor hardware", L"Монитор системы", L"Donanım İzleme", L"हार्डवेयर मॉनिटर", L"硬件监视器", L"ハードウェア モニター", L"하드웨어 모니터"}},
@@ -3076,7 +3074,6 @@ void LoadSettings() {
     next.topBarEnabled = Wh_GetIntSetting(L"TopBar.Enabled") != 0;
     next.topBarSolid = EqualsNoCase(GetStringSettingCopy(L"TopBar.Material"), L"solid");
     next.topBarHeight = ClampInt(Wh_GetIntSetting(L"TopBar.Height"), 0, 200);
-    next.topBarTint = Clamp(Wh_GetIntSetting(L"TopBar.TintOpacity") / 100.0f, 0.0f, 1.0f);
     // The bar lives on the top edge, so the island cannot sit at the bottom.
     if (next.topBarEnabled && IsBottomPosition(next.position)) {
         next.position = Position::TopCenter;
@@ -4210,6 +4207,293 @@ void ApplyBackdropMaterial(HWND) {
     g_layoutDirty = true;
 }
 
+// ── Design tokens ─────────────────────────────────────────────────────────────
+// Transcribed from design/design-tokens.json (sizes, colours, radii, type,
+// glyphs), design/motion.md (springs) and design/components.md (layout). Those
+// files are the only source for the bar and the bar notch: change them there
+// first, then here. Lengths are px at 100 % -- multiply by sizeScale, which
+// already includes the monitor DPI. Colours are the dark set (the bar and the
+// island are black in both themes).
+namespace Design {
+
+// metrics.spacing / metrics.size / metrics.radius
+constexpr float kBarHeight = 32.0f;         // bar-height
+constexpr float kBarPadX = 10.0f;           // bar-pad-x
+constexpr float kItemPadX = 10.0f;          // bar-item-pad-x
+constexpr float kStatusPadX = 8.0f;         // bar-status-pad-x
+constexpr float kStatusGap = 2.0f;          // bar-status-gap
+constexpr float kTextIconGap = 5.0f;        // bar-text-icon-gap
+constexpr float kIslandSideGap = 12.0f;     // island-side-gap
+constexpr float kCompactInset = 6.0f;       // island-compact-inset
+constexpr float kIslandPad = 20.0f;         // island-pad
+constexpr float kIslandRowGap = 12.0f;      // island-row-gap
+constexpr float kBarIcon = 16.0f;           // bar-icon
+constexpr float kBarLogo = 14.0f;           // bar-logo
+constexpr float kBatteryGlyph = 20.0f;      // bar-battery-glyph
+constexpr float kLayoutBoxW = 22.0f;        // layout-box-w
+constexpr float kLayoutBoxH = 15.0f;        // layout-box-h
+constexpr float kLayoutBoxStroke = 1.25f;   // components.md: Раскладка
+constexpr float kRadiusLayoutBox = 4.0f;    // radius-layout-box
+constexpr float kArtCompact = 20.0f;        // art-compact
+constexpr float kRadiusArtCompact = 5.0f;   // radius-art-compact
+constexpr float kNotifyIcon = 36.0f;        // notify-icon
+constexpr float kRadiusNotifyIcon = 9.0f;   // radius-notify-icon
+constexpr float kNotifyIconGlyph = 18.0f;   // components.md: Уведомление
+constexpr float kVizBarW = 3.0f;            // viz-bar-w
+constexpr float kVizGap = 2.0f;             // viz-gap
+constexpr float kVizMinH = 3.0f;            // viz-min-h
+constexpr float kVizMaxH = 14.0f;           // viz-max-h
+constexpr float kVizBarRadius = 1.5f;       // components.md: Музыка
+constexpr float kVizRightInset = 4.0f;      // vizCompact.right = right − compact-inset − 4
+constexpr float kDimAlpha = 0.45f;          // prototype: .mb-item.is-dim
+
+// island.states
+struct IslandState {
+    float w;
+    float h;  // from the top of the screen
+    float radiusBottom;
+    float radiusEar;
+};
+constexpr IslandState kIdle{185.0f, 32.0f, 10.0f, 8.0f};
+constexpr IslandState kMusic{300.0f, 32.0f, 10.0f, 8.0f};
+constexpr IslandState kNotify{380.0f, 104.0f, 26.0f, 12.0f};
+constexpr IslandState kPlayer{520.0f, 190.0f, 32.0f, 12.0f};
+
+// color.dark
+constexpr D2D1_COLOR_F kBarBg{0.0f, 0.0f, 0.0f, 1.0f};               // bar-bg
+constexpr D2D1_COLOR_F kBarInk{1.0f, 1.0f, 1.0f, 1.0f};              // bar-ink
+constexpr D2D1_COLOR_F kBarInk2{1.0f, 1.0f, 1.0f, 0.6f};             // bar-ink-2
+constexpr D2D1_COLOR_F kIslandBg{0.0f, 0.0f, 0.0f, 1.0f};            // island-bg
+constexpr D2D1_COLOR_F kIslandInk2{1.0f, 1.0f, 1.0f, 0.6f};          // island-ink-2
+constexpr D2D1_COLOR_F kGlassTint{0.0784f, 0.0784f, 0.0863f, 0.36f}; // bar-glass-tint
+constexpr D2D1_COLOR_F kGlassInk{1.0f, 1.0f, 1.0f, 1.0f};            // bar-glass-ink
+constexpr D2D1_COLOR_F kAccent{0.0392f, 0.5176f, 1.0f, 1.0f};        // accent
+constexpr D2D1_COLOR_F kOnAccent{1.0f, 1.0f, 1.0f, 1.0f};            // on-accent
+constexpr D2D1_COLOR_F kRed{1.0f, 0.2706f, 0.2275f, 1.0f};           // red
+
+// springs (motion.md): stiffness / damping for mass 1
+struct SpringParams {
+    float stiffness;
+    float damping;
+};
+constexpr SpringParams kIslandExpand{157.91f, 18.10f};    // island.expand
+constexpr SpringParams kIslandCollapse{223.80f, 27.53f};  // island.collapse
+constexpr SpringParams kIslandDrop{130.51f, 14.62f};      // island.drop
+constexpr SpringParams kBarItems{438.65f, 41.89f};        // bar.items
+constexpr SpringParams kVizBar{986.96f, 34.56f};          // viz.bar
+
+// delays (motion.md)
+constexpr double kBarItemsReturnStaggerSec = 0.025;  // bar_items_return_stagger_ms, per 40 px
+constexpr double kBarItemsReturnMaxSec = 0.100;
+constexpr float kBarItemsStaggerStepPx = 40.0f;
+constexpr float kBarItemsShiftPx = 6.0f;            // translateX on hide
+constexpr float kBarItemsHiddenScale = 0.9f;        // scale on hide
+constexpr double kVizRetargetSec = 0.150;           // viz.bar: new target every 150 ms
+
+// glyphs (Segoe Fluent Icons / Segoe MDL2 Assets) and glyphRules
+constexpr wchar_t kGlyphBluetooth = 0xE702;
+constexpr wchar_t kGlyphWifi = 0xE701;  // ghost at 0.30 under every level; level 4 at 1.0
+constexpr wchar_t kGlyphWifiLevel[3] = {0xE872, 0xE873, 0xE874};  // levels 1..3
+constexpr float kWifiGhostAlpha = 0.30f;
+constexpr wchar_t kGlyphMute = 0xE74F;
+constexpr wchar_t kGlyphVolume[4] = {0xE992, 0xE993, 0xE994, 0xE995};
+constexpr wchar_t kGlyphBattery[11] = {0xE850, 0xE851, 0xE852, 0xE853, 0xE854, 0xE855,
+                                       0xE856, 0xE857, 0xE858, 0xE859, 0xE83F};
+constexpr wchar_t kGlyphBatteryCharging[11] = {0xE85A, 0xE85B, 0xE85C, 0xE85D, 0xE85E, 0xE85F,
+                                               0xE860, 0xE861, 0xE862, 0xE83E, 0xEA93};
+constexpr wchar_t kGlyphBrightness = 0xE706;  // weather: clear
+constexpr wchar_t kGlyphCloud = 0xE753;       // weather: cloudy
+
+inline int BatteryIndex(int pct) {
+    return pct >= 95 ? 10 : pct < 5 ? 0 : (pct - 5) / 10 + 1;
+}
+inline wchar_t VolumeGlyph(int pct, bool muted) {
+    if (muted) return kGlyphMute;
+    if (pct <= 0) return kGlyphVolume[0];
+    if (pct <= 33) return kGlyphVolume[1];
+    if (pct <= 66) return kGlyphVolume[2];
+    return kGlyphVolume[3];
+}
+
+// typography.styles
+enum class Text { BarApp, BarMenu, BarLayout, IslandTime, IslandNotifyTitle, IslandNotifyBody, IslandMeta, Count };
+struct TextSpec {
+    bool small;  // "Segoe UI Variable Small" instead of "... Text"
+    float size;
+    float lineHeight;
+    DWRITE_FONT_WEIGHT weight;
+    float tracking;
+    bool tnum;
+};
+constexpr TextSpec kText[static_cast<int>(Text::Count)] = {
+    {false, 13.0f, 16.0f, DWRITE_FONT_WEIGHT_BOLD, -0.08f, false},       // bar-app
+    {false, 13.0f, 16.0f, DWRITE_FONT_WEIGHT_NORMAL, -0.08f, false},     // bar-menu
+    {true, 10.0f, 12.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, 0.12f, false},    // bar-layout
+    {false, 13.0f, 16.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, -0.08f, true},   // island-time
+    {false, 13.0f, 16.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, -0.08f, false},  // island-notify-title
+    {false, 12.0f, 15.0f, DWRITE_FONT_WEIGHT_NORMAL, 0.0f, false},       // island-notify-body
+    {true, 11.0f, 13.0f, DWRITE_FONT_WEIGHT_MEDIUM, 0.06f, true},        // island-meta
+};
+
+}  // namespace Design
+
+// ── Design type ──────────────────────────────────────────────────────────────
+// Text layouts in the design's styles: Segoe UI Variable Text / Small (Segoe UI
+// when absent), the style's weight, size, line height and tracking, and tabular
+// figures where the style (or the caller) asks for them. Render thread only.
+namespace DesignType {
+
+// Formats are cached per scale: the island draws in content px (scale 1, the
+// render target is already scaled) while the bar draws in device px.
+struct ScaleCache {
+    float scale = 0.0f;
+    ComPtr<IDWriteTextFormat> formats[static_cast<int>(Design::Text::Count)];
+    std::vector<std::pair<float, ComPtr<IDWriteTextFormat>>> icons;  // by px
+};
+struct Cache {
+    ComPtr<IDWriteFactory> factory;
+    std::wstring textFamily;
+    std::wstring smallFamily;
+    std::wstring iconFamily;
+    ScaleCache scales[3];
+    int next = 0;
+};
+Cache g_cache;
+
+bool HasFamily(IDWriteFactory* factory, const wchar_t* name) {
+    ComPtr<IDWriteFontCollection> fonts;
+    if (FAILED(factory->GetSystemFontCollection(fonts.GetAddressOf(), FALSE))) return false;
+    UINT32 index = 0;
+    BOOL exists = FALSE;
+    return SUCCEEDED(fonts->FindFamilyName(name, &index, &exists)) && exists;
+}
+
+IDWriteFactory* Factory() {
+    if (!g_cache.factory) {
+        DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
+                            reinterpret_cast<IUnknown**>(g_cache.factory.GetAddressOf()));
+        if (g_cache.factory) {
+            IDWriteFactory* f = g_cache.factory.Get();
+            g_cache.textFamily = HasFamily(f, L"Segoe UI Variable Text") ? L"Segoe UI Variable Text" : L"Segoe UI";
+            g_cache.smallFamily =
+                HasFamily(f, L"Segoe UI Variable Small") ? L"Segoe UI Variable Small" : g_cache.textFamily;
+            g_cache.iconFamily = HasFamily(f, L"Segoe Fluent Icons") ? L"Segoe Fluent Icons" : L"Segoe MDL2 Assets";
+        }
+    }
+    return g_cache.factory.Get();
+}
+
+ScaleCache& ForScale(float scale) {
+    for (ScaleCache& c : g_cache.scales) {
+        if (std::fabs(c.scale - scale) < 0.001f) return c;
+    }
+    ScaleCache& slot = g_cache.scales[g_cache.next];
+    g_cache.next = (g_cache.next + 1) % static_cast<int>(ARRAYSIZE(g_cache.scales));
+    slot = ScaleCache{};
+    slot.scale = scale;
+    return slot;
+}
+
+IDWriteTextFormat* Format(Design::Text style, float scale) {
+    IDWriteFactory* f = Factory();
+    if (!f) return nullptr;
+    ComPtr<IDWriteTextFormat>& slot = ForScale(scale).formats[static_cast<int>(style)];
+    if (!slot) {
+        const Design::TextSpec& spec = Design::kText[static_cast<int>(style)];
+        const std::wstring& family = spec.small ? g_cache.smallFamily : g_cache.textFamily;
+        if (FAILED(f->CreateTextFormat(family.c_str(), nullptr, spec.weight, DWRITE_FONT_STYLE_NORMAL,
+                                       DWRITE_FONT_STRETCH_NORMAL, spec.size * scale, L"",
+                                       slot.GetAddressOf()))) {
+            return nullptr;
+        }
+        slot->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+        slot->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        slot->SetLineSpacing(DWRITE_LINE_SPACING_METHOD_UNIFORM, spec.lineHeight * scale,
+                             spec.lineHeight * scale * 0.8f);
+    }
+    return slot.Get();
+}
+
+// The icon font at `px`, centred in whatever box it is drawn into.
+IDWriteTextFormat* Icons(float px, float scale) {
+    IDWriteFactory* f = Factory();
+    if (!f) return nullptr;
+    ScaleCache& cache = ForScale(scale);
+    for (auto& [size, format] : cache.icons) {
+        if (std::fabs(size - px) < 0.01f) return format.Get();
+    }
+    ComPtr<IDWriteTextFormat> format;
+    if (FAILED(f->CreateTextFormat(g_cache.iconFamily.c_str(), nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+                                   DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL, px * scale, L"",
+                                   format.GetAddressOf()))) {
+        return nullptr;
+    }
+    format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
+    format->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+    format->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+    cache.icons.emplace_back(px, format);
+    return format.Get();
+}
+
+// A laid-out string in `style`, `boxHeight` tall (text centred vertically) and at
+// most `maxWidth` wide. One line ends in an ellipsis when too long; with
+// maxLines > 1 it wraps and the last visible line is trimmed instead.
+ComPtr<IDWriteTextLayout> Layout(const std::wstring& text, Design::Text style, float scale, float maxWidth,
+                                 float boxHeight, int maxLines = 1, bool forceTnum = false) {
+    ComPtr<IDWriteTextLayout> layout;
+    IDWriteFactory* f = Factory();
+    IDWriteTextFormat* format = Format(style, scale);
+    if (!f || !format || text.empty()) return layout;
+    const Design::TextSpec& spec = Design::kText[static_cast<int>(style)];
+    if (maxLines > 1) boxHeight = std::min(boxHeight, spec.lineHeight * scale * maxLines);
+    if (FAILED(f->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()), format,
+                                   std::max(1.0f, maxWidth), std::max(1.0f, boxHeight), layout.GetAddressOf()))) {
+        return nullptr;
+    }
+    const DWRITE_TEXT_RANGE all = {0, static_cast<UINT32>(text.size())};
+    if (maxLines > 1) {
+        layout->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+        layout->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_NEAR);
+    }
+    const DWRITE_TRIMMING trimming = {DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
+    ComPtr<IDWriteInlineObject> ellipsis;
+    if (SUCCEEDED(f->CreateEllipsisTrimmingSign(format, ellipsis.GetAddressOf()))) {
+        layout->SetTrimming(&trimming, ellipsis.Get());
+    }
+    if (spec.tnum || forceTnum) {
+        ComPtr<IDWriteTypography> typography;
+        if (SUCCEEDED(f->CreateTypography(typography.GetAddressOf()))) {
+            typography->AddFontFeature({DWRITE_FONT_FEATURE_TAG_TABULAR_FIGURES, 1});
+            layout->SetTypography(typography.Get(), all);
+        }
+    }
+    if (spec.tracking != 0.0f) {
+        ComPtr<IDWriteTextLayout1> layout1;
+        if (SUCCEEDED(layout.As(&layout1))) {
+            layout1->SetCharacterSpacing(0.0f, spec.tracking * scale, 0.0f, all);
+        }
+    }
+    return layout;
+}
+
+// Width the text actually takes (never more than the layout's maxWidth).
+float Width(IDWriteTextLayout* layout) {
+    if (!layout) return 0.0f;
+    DWRITE_TEXT_METRICS m = {};
+    if (FAILED(layout->GetMetrics(&m))) return 0.0f;
+    return std::ceil(std::min(m.widthIncludingTrailingWhitespace, layout->GetMaxWidth()));
+}
+
+// Height of the laid-out lines.
+float Height(IDWriteTextLayout* layout) {
+    if (!layout) return 0.0f;
+    DWRITE_TEXT_METRICS m = {};
+    if (FAILED(layout->GetMetrics(&m))) return 0.0f;
+    return m.height;
+}
+
+}  // namespace DesignType
+
 // ── Bar status ───────────────────────────────────────────────────────────────
 // Everything the top bar shows on its left and right, gathered on one worker
 // thread (an MTA, so WinRT and Core Audio calls can block safely) and published
@@ -4241,7 +4525,7 @@ struct Model {
     bool hasBattery = false;
     int battery = 0;        // 0..100
     bool charging = false;  // on AC power
-    std::wstring layout;    // "РУС", "ENG", ...
+    std::wstring layout;    // "RU", "EN", ...
     std::wstring date;      // "Пт 6 нояб."
     bool operator==(const Model&) const = default;
 };
@@ -4401,21 +4685,17 @@ void CALLBACK ForegroundEventProc(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD,
 
 // ---- keyboard layout ------------------------------------------------------------
 
-// First three letters of the language's own name, upper-cased: "русский" ->
-// "РУС", "English" -> "ENG", "Deutsch" -> "DEU" -- what the Windows tray shows.
+// Two-letter ISO 639-1 code, upper-cased, as drawn in the bar's framed layout
+// box (prototype.html: "RU", "EN").
 std::wstring LayoutLabel(HKL hkl, std::unordered_map<LANGID, std::wstring>& cache) {
     const LANGID lang = LOWORD(reinterpret_cast<UINT_PTR>(hkl));
     if (auto it = cache.find(lang); it != cache.end()) return it->second;
     wchar_t locale[LOCALE_NAME_MAX_LENGTH] = {};
     std::wstring label;
     if (LCIDToLocaleName(MAKELCID(lang, SORT_DEFAULT), locale, ARRAYSIZE(locale), 0) > 0) {
-        wchar_t native[96] = {};
-        if (GetLocaleInfoEx(locale, LOCALE_SNATIVELANGNAME, native, ARRAYSIZE(native)) > 0) {
-            label.assign(native, std::min<size_t>(3, wcslen(native)));
-            wchar_t upper[8] = {};
-            const int n = LCMapStringEx(locale, LCMAP_UPPERCASE, label.c_str(), static_cast<int>(label.size()),
-                                        upper, ARRAYSIZE(upper), nullptr, nullptr, 0);
-            if (n > 0) label.assign(upper, n);
+        wchar_t iso[16] = {};
+        if (GetLocaleInfoEx(locale, LOCALE_SISO639LANGNAME, iso, ARRAYSIZE(iso)) > 0) {
+            for (const wchar_t* c = iso; *c && label.size() < 3; ++c) label.push_back(towupper(*c));
         }
     }
     cache[lang] = label;
@@ -4666,17 +4946,20 @@ DWORD WINAPI ThreadProc(void*) {
 // Paints the bar's side content (defined further down, after the weather helpers).
 namespace BarContent {
 enum Item { kLogo, kApp, kWeather, kBluetooth, kNetwork, kVolume, kBattery, kLayout, kDate, kItemCount };
+inline bool IsLeft(int item) { return item <= kWeather; }
+// Per-item hide animation (motion.md "Разъезд бокового контента бара").
+struct ItemVisual {
+    float alpha = 1.0f;  // 1 shown, 0 hidden; scale follows as 0.9 + 0.1 * alpha
+    float dx = 0.0f;     // translateX, px
+};
 struct Metrics {
     bool valid = false;
-    float leftEnd = 0.0f;     // right edge of the left group, before sliding (client px)
-    float rightStart = 0.0f;  // left edge of the right group, before sliding
     bool present[kItemCount] = {};
-    D2D1_RECT_F rects[kItemCount] = {};  // as drawn, including the slide
+    D2D1_RECT_F boxes[kItemCount] = {};  // full-height item boxes, client px, before animation
 };
-void Paint(ID2D1RenderTarget* rt, ID2D1Factory* factory, D2D1_SIZE_F size, const Settings& s,
-           const BarStatus::Model& model, bool solid, float leftShift, float rightShift, Metrics* out);
+void Paint(ID2D1RenderTarget* rt, D2D1_SIZE_F size, const BarStatus::Model& model, bool glass, float scale,
+           const ItemVisual* visuals, Metrics* out);
 void ReleaseTargetResources();
-void ReleaseAll();
 }  // namespace BarContent
 
 // ── Top bar (AppBar) ─────────────────────────────────────────────────────────
@@ -4702,15 +4985,11 @@ namespace TopBar {
 constexpr wchar_t kClassName[] = L"Windhawk.DynamicIslandTopBar";
 constexpr UINT kCallbackMessage = WM_APP + 0x44A;
 
-// Automatic height, content px (multiplied by sizeScale, which includes DPI):
-// the resting island plus a 2px margin above and below.
-constexpr float kAutoHeight = 40.0f;
+// Automatic height, content px (multiplied by sizeScale, which includes DPI).
+constexpr float kAutoHeight = Design::kBarHeight;
 // Height of the resting island, which is centred vertically in the bar. Taller
 // collapsed pills (alerts) keep the same top edge and grow down past the bar.
 constexpr float kPillRestHeight = 36.0f;
-// Clearance between the notch and the side content, content px.
-constexpr float kNotchClearance = 16.0f;
-
 HWND g_bar = nullptr;
 HWND g_island = nullptr;
 bool g_classRegistered = false;
@@ -4730,11 +5009,17 @@ DWORD g_accentColor = 0;
 ComPtr<ID2D1Factory> g_factory;
 ComPtr<ID2D1HwndRenderTarget> g_target;
 
-// Side content: where it was laid out last, and how far each group is slid away
-// from a notch that has grown into it (left group: <= 0, right group: >= 0).
+// Side content: where each item was laid out last, and its hide animation.
 BarContent::Metrics g_metrics;
-SpringValue g_leftShift;
-SpringValue g_rightShift;
+struct ItemAnim {
+    SpringValue alpha;
+    SpringValue dx;
+    bool hidden = false;
+    bool returnPending = false;
+    double returnAt = 0.0;
+    ItemAnim() { alpha.Reset(1.0f); }
+};
+ItemAnim g_items[BarContent::kItemCount];
 
 // The bar's screen rect as the shell granted it. Strict leaf lock.
 std::mutex g_anchorMutex;
@@ -4792,9 +5077,13 @@ void Paint() {
         g_target->SetTransform(D2D1::Matrix3x2F::Identity());
         g_target->Clear(g_solid ? g_fill : D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
 
-        const Settings settings = GetSettingsCopy();
-        BarContent::Paint(g_target.Get(), g_factory.Get(), g_target->GetSize(), settings, BarStatus::Get(),
-                          g_solid, g_leftShift.value, g_rightShift.value, &g_metrics);
+        BarContent::ItemVisual visuals[BarContent::kItemCount];
+        for (int i = 0; i < BarContent::kItemCount; ++i) {
+            visuals[i].alpha = Clamp(g_items[i].alpha.value, 0.0f, 1.0f);
+            visuals[i].dx = g_items[i].dx.value;
+        }
+        BarContent::Paint(g_target.Get(), g_target->GetSize(), BarStatus::Get(), !g_solid, g_scale, visuals,
+                          &g_metrics);
 
         if (g_target->EndDraw() == static_cast<HRESULT>(D2DERR_RECREATE_TARGET)) {
             BarContent::ReleaseTargetResources();
@@ -4811,10 +5100,8 @@ void ApplyMaterial(const Settings& s) {
     int state = Dwm::kAccentDisabled;
     DWORD color = 0;
     if (!g_solid) {
-        D2D1_COLOR_F tint = s.pillBgColor;
-        tint.a = 1.0f;
         state = Dwm::kAccentEnableAcrylicBlurBehind;
-        color = Dwm::ColorToAccentAbgr(tint, s.topBarTint);
+        color = Dwm::ColorToAccentAbgr(Design::kGlassTint, Design::kGlassTint.a);  // bar-glass-tint
     }
     if (state == g_accentState && color == g_accentColor) return;
     Dwm::AccentPolicy policy = {};
@@ -4938,12 +5225,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case BarStatus::kRefreshMessage:
             InvalidateRect(hwnd, nullptr, FALSE);
             return 0;
-        case WM_LBUTTONUP: {
+        case WM_LBUTTONDOWN: {
+            // Pressing acts, like macOS; the whole full-height box is the target, and
+            // an item hidden by the island is not (components.md "Hit-test").
             const D2D1_POINT_2F pt = D2D1::Point2F(static_cast<float>(GET_X_LPARAM(lParam)),
                                                    static_cast<float>(GET_Y_LPARAM(lParam)));
             auto hit = [&](BarContent::Item item) {
-                const D2D1_RECT_F& r = g_metrics.rects[item];
-                return g_metrics.present[item] && pt.x >= r.left && pt.x < r.right;
+                const D2D1_RECT_F& r = g_metrics.boxes[item];
+                return g_metrics.present[item] && !g_items[item].hidden && pt.x >= r.left && pt.x < r.right;
             };
             if (hit(BarContent::kLogo)) OpenStartMenu();
             return 0;
@@ -5031,12 +5320,11 @@ void Unregister() {
 void Destroy() {
     Unregister();
     BarStatus::g_notifyHwnd = nullptr;
-    BarContent::ReleaseAll();
+    BarContent::ReleaseTargetResources();
     g_target.Reset();
     g_factory.Reset();
     g_metrics = {};
-    g_leftShift.Reset(0.0f);
-    g_rightShift.Reset(0.0f);
+    for (ItemAnim& item : g_items) item = ItemAnim{};
     if (g_bar) {
         DestroyWindow(g_bar);
         g_bar = nullptr;
@@ -5087,9 +5375,7 @@ void Apply(HWND island) {
         UpdatePosition(true);
     }
 
-    D2D1_COLOR_F fill = s.pillBgColor;
-    fill.a = 1.0f;
-    g_fill = fill;
+    g_fill = Design::kBarBg;
     g_solid = s.topBarSolid || !DwmBackdrop::Available();
     ApplyMaterial(s);
     InvalidateRect(g_bar, nullptr, FALSE);
@@ -5105,32 +5391,52 @@ void OnTaskbarCreated(HWND island) {
     Apply(island);
 }
 
-// Called every render-loop iteration with the island's pill rect (screen px).
-// When the notch grows into the side content, that group slides away from it on
-// a spring with the island's own feel, and slides back when the notch shrinks.
-// Repaints only while a group is actually moving.
-void Tick(float dt, float stiffnessMult, float dampingMult, const RECT& notch, bool notchVisible) {
-    if (!g_bar || g_fullscreenHidden) return;
-    float targetLeft = 0.0f;
-    float targetRight = 0.0f;
+// Called every render-loop iteration with the island's current (animating) rect
+// in screen px. motion.md "Разъезд бокового контента бара": an item whose box
+// meets [L - 12, R + 12] hides (opacity -> 0, 6 px outward, scale 0.9) on the
+// bar.items spring at once and stops taking clicks; it comes back on the same
+// spring, 25 ms later per 40 px of distance from the island (max 100 ms). Other
+// items never move. Repaints only while something is animating.
+void Tick(float dt, const RECT& island, bool islandVisible) {
+    if (!g_bar || g_fullscreenHidden || !g_metrics.valid) return;
     RECT bar = {};
-    if (notchVisible && g_metrics.valid && GetAnchorRect(&bar)) {
-        const float clearance = kNotchClearance * g_scale;
-        const float notchLeft = static_cast<float>(notch.left - bar.left);
-        const float notchRight = static_cast<float>(notch.right - bar.left);
-        targetLeft = std::min(0.0f, (notchLeft - clearance) - g_metrics.leftEnd);
-        targetRight = std::max(0.0f, (notchRight + clearance) - g_metrics.rightStart);
+    if (!GetAnchorRect(&bar)) return;
+    const double now = NowSeconds();
+    const float gap = Design::kIslandSideGap * g_scale;
+    const float L = static_cast<float>(island.left - bar.left);
+    const float R = static_cast<float>(island.right - bar.left);
+    bool moving = false;
+    for (int i = 0; i < BarContent::kItemCount; ++i) {
+        ItemAnim& item = g_items[i];
+        const D2D1_RECT_F& box = g_metrics.boxes[i];
+        const float side = BarContent::IsLeft(i) ? -1.0f : 1.0f;
+        const bool hide = islandVisible && g_metrics.present[i] && box.right > L - gap && box.left < R + gap;
+        if (hide != item.hidden) {
+            item.hidden = hide;
+            if (hide) {
+                item.returnPending = false;
+                item.alpha.target = 0.0f;
+                item.dx.target = Design::kBarItemsShiftPx * g_scale * side;
+            } else {
+                const float distance = std::fabs(side < 0.0f ? box.right - L : R - box.left);
+                const double steps = std::round(distance / (Design::kBarItemsStaggerStepPx * g_scale));
+                item.returnAt = now + std::min(Design::kBarItemsReturnMaxSec,
+                                               Design::kBarItemsReturnStaggerSec * steps);
+                item.returnPending = true;
+            }
+        }
+        if (item.returnPending && now >= item.returnAt) {
+            item.returnPending = false;
+            item.alpha.target = 1.0f;
+            item.dx.target = 0.0f;
+        }
+        const float a0 = item.alpha.value;
+        const float d0 = item.dx.value;
+        item.alpha.Step(dt, Design::kBarItems.stiffness, Design::kBarItems.damping);
+        item.dx.Step(dt, Design::kBarItems.stiffness, Design::kBarItems.damping);
+        if (std::fabs(item.alpha.value - a0) > 0.0005f || std::fabs(item.dx.value - d0) > 0.01f) moving = true;
     }
-    g_leftShift.target = targetLeft;
-    g_rightShift.target = targetRight;
-    const float beforeLeft = g_leftShift.value;
-    const float beforeRight = g_rightShift.value;
-    g_leftShift.Step(dt, 280.0f * stiffnessMult, 24.0f * dampingMult);
-    g_rightShift.Step(dt, 280.0f * stiffnessMult, 24.0f * dampingMult);
-    if (std::fabs(g_leftShift.value - beforeLeft) > 0.05f ||
-        std::fabs(g_rightShift.value - beforeRight) > 0.05f) {
-        InvalidateRect(g_bar, nullptr, FALSE);
-    }
+    if (moving) InvalidateRect(g_bar, nullptr, FALSE);
 }
 
 // Screen y of the resting pill's top edge inside the bar.
@@ -13902,360 +14208,218 @@ WeatherVisual WeatherVisualFromCode(int code) {
 }
 
 // ── Bar content ──────────────────────────────────────────────────────────────
-// The top bar's two groups, laid out like the macOS menu bar:
-//   left:  Windows logo · active app (bold) · weather
-//   right: Bluetooth · network · volume · battery % · keyboard layout · date
-// Icons come from the system's own icon font -- Segoe Fluent Icons on Windows 11,
-// Segoe MDL2 Assets otherwise -- using the glyphs the Windows 11 tray shows for
-// each state. Neither font has the Windows logo or weather symbols, so those are
-// drawn as simple monochrome vectors, in the spirit of the menu bar's SF Symbols.
-// Painted by TopBar::Paint, i.e. only when the model, theme or size changes, or
-// while a group slides.
+// The bar's two groups, laid out exactly as design/components.md "Меню-бар":
+//   left (from bar-pad-x, no gaps):  logo · app name (bar-app) · weather
+//   right (to bar-pad-x, gap 2):     Bluetooth · Wi-Fi · volume · battery % ·
+//                                    layout box · date
+// Text items are 10 + text + 10, status items 8 + 16 + 8, the battery
+// 8 + "87%" + 5 + 20 px glyph + 8, the layout box 8 + 22 + 8. Everything is
+// centred on the bar's height. Icons are Segoe Fluent Icons (MDL2 fallback) per
+// glyphRules; the Windows logo is drawn (no glyph exists). Each item draws with
+// its own hide animation (alpha, translateX, scale), driven by TopBar::Tick.
 namespace BarContent {
 
-// Layout in content px (multiplied by sizeScale).
-constexpr float kEdgePad = 14.0f;
-constexpr float kItemGap = 16.0f;
-constexpr float kTextSize = 13.0f;
-constexpr float kIconSize = 15.0f;
-constexpr float kIconTextGap = 5.0f;
-constexpr float kLogoSize = 13.0f;
-constexpr float kLogoGap = 20.0f;      // logo -> app name, a little wider like macOS
-constexpr float kAppMaxWidth = 280.0f;
-constexpr float kHitPad = 6.0f;        // click slop around each item
-
-// Segoe Fluent Icons / MDL2 glyphs, as used by the Windows 11 tray.
-constexpr wchar_t kGlyphBluetooth[] = L"";
-constexpr wchar_t kGlyphEthernet[] = L"";
-constexpr wchar_t kGlyphOffline[] = L"";
-constexpr wchar_t kGlyphWifi[4][2] = {L"", L"", L"", L""};  // 1..4 bars
-constexpr wchar_t kGlyphMute[] = L"";
-constexpr wchar_t kGlyphVolume[4][2] = {L"", L"", L"", L""};
-constexpr wchar_t kGlyphThermometer[] = L"";
-constexpr wchar_t kBatteryBase = 0xEBA0;          // Battery0..Battery10
-constexpr wchar_t kBatteryChargingBase = 0xEBAB;  // BatteryCharging0..10
-
-struct Resources {
-    ComPtr<IDWriteFactory> dwrite;
-    ComPtr<IDWriteTextFormat> text;
-    ComPtr<IDWriteTextFormat> bold;
-    ComPtr<IDWriteTextFormat> icons;
-    float scale = 0.0f;
-    ComPtr<ID2D1SolidColorBrush> brush;  // bound to the bar's render target
-};
-Resources g_res;
+ComPtr<ID2D1SolidColorBrush> g_brush;  // bound to the bar's render target
 
 void ReleaseTargetResources() {
-    g_res.brush.Reset();
+    g_brush.Reset();
 }
 
-void ReleaseAll() {
-    g_res = Resources{};
+D2D1_COLOR_F WithAlpha(D2D1_COLOR_F c, float alpha) {
+    c.a *= alpha;
+    return c;
 }
 
-bool HasFamily(IDWriteFactory* factory, const wchar_t* name) {
-    ComPtr<IDWriteFontCollection> fonts;
-    if (FAILED(factory->GetSystemFontCollection(fonts.GetAddressOf(), FALSE))) return false;
-    UINT32 index = 0;
-    BOOL exists = FALSE;
-    return SUCCEEDED(fonts->FindFamilyName(name, &index, &exists)) && exists;
-}
-
-bool EnsureFormats(float scale) {
-    if (!g_res.dwrite &&
-        FAILED(DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
-                                   reinterpret_cast<IUnknown**>(g_res.dwrite.GetAddressOf())))) {
-        return false;
-    }
-    if (g_res.text && std::fabs(g_res.scale - scale) < 0.001f) return true;
-    g_res.text.Reset();
-    g_res.bold.Reset();
-    g_res.icons.Reset();
-
-    IDWriteFactory* dw = g_res.dwrite.Get();
-    const wchar_t* textFamily = HasFamily(dw, L"Segoe UI Variable Text") ? L"Segoe UI Variable Text" : L"Segoe UI";
-    const wchar_t* iconFamily = HasFamily(dw, L"Segoe Fluent Icons") ? L"Segoe Fluent Icons" : L"Segoe MDL2 Assets";
-    auto make = [&](const wchar_t* family, DWRITE_FONT_WEIGHT weight, float size,
-                    ComPtr<IDWriteTextFormat>& out) {
-        if (FAILED(dw->CreateTextFormat(family, nullptr, weight, DWRITE_FONT_STYLE_NORMAL,
-                                        DWRITE_FONT_STRETCH_NORMAL, size, L"", out.GetAddressOf()))) {
-            return false;
-        }
-        out->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
-        out->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
-        return true;
-    };
-    if (!make(textFamily, DWRITE_FONT_WEIGHT_NORMAL, kTextSize * scale, g_res.text) ||
-        !make(textFamily, DWRITE_FONT_WEIGHT_BOLD, kTextSize * scale, g_res.bold) ||
-        !make(iconFamily, DWRITE_FONT_WEIGHT_NORMAL, kIconSize * scale, g_res.icons)) {
-        g_res.text.Reset();
-        g_res.bold.Reset();
-        g_res.icons.Reset();
-        return false;
-    }
-    // A long app name ends in an ellipsis instead of running toward the notch.
-    const DWRITE_TRIMMING trimming = {DWRITE_TRIMMING_GRANULARITY_CHARACTER, 0, 0};
-    ComPtr<IDWriteInlineObject> ellipsis;
-    if (SUCCEEDED(dw->CreateEllipsisTrimmingSign(g_res.bold.Get(), ellipsis.GetAddressOf()))) {
-        g_res.bold->SetTrimming(&trimming, ellipsis.Get());
-    }
-    g_res.scale = scale;
-    return true;
-}
-
-float TextWidth(const std::wstring& text, IDWriteTextFormat* format) {
-    if (text.empty()) return 0.0f;
+float GlyphWidth(wchar_t glyph, float px, float scale) {
+    IDWriteFactory* f = DesignType::Factory();
+    IDWriteTextFormat* format = DesignType::Icons(px, scale);
     ComPtr<IDWriteTextLayout> layout;
-    if (FAILED(g_res.dwrite->CreateTextLayout(text.c_str(), static_cast<UINT32>(text.size()), format, 10000.0f,
-                                              100.0f, layout.GetAddressOf()))) {
-        return 0.0f;
+    if (!f || !format || FAILED(f->CreateTextLayout(&glyph, 1, format, 1000.0f, 100.0f, layout.GetAddressOf()))) {
+        return px * scale;
     }
-    DWRITE_TEXT_METRICS metrics = {};
-    if (FAILED(layout->GetMetrics(&metrics))) return 0.0f;
-    return std::ceil(metrics.widthIncludingTrailingWhitespace);
+    DWRITE_TEXT_METRICS m = {};
+    layout->GetMetrics(&m);
+    return std::ceil(m.width);
 }
 
-// Text vertically centred in the bar, starting at x.
-void DrawTextAt(ID2D1RenderTarget* rt, const std::wstring& text, IDWriteTextFormat* format, float x,
-                float width, float height, ID2D1Brush* brush) {
-    rt->DrawTextW(text.c_str(), static_cast<UINT32>(text.size()), format,
-                  D2D1::RectF(x, 0.0f, x + width + 1.0f, height), brush, D2D1_DRAW_TEXT_OPTIONS_NONE);
-}
-
-// Windows 11 logo: four squares.
-void DrawWindowsLogo(ID2D1RenderTarget* rt, float x, float cy, float size, ID2D1Brush* brush) {
-    const float gap = std::max(1.0f, std::round(size * 0.09f));
-    const float cell = (size - gap) * 0.5f;
-    const float top = cy - size * 0.5f;
-    for (int row = 0; row < 2; ++row) {
-        for (int col = 0; col < 2; ++col) {
-            const float l = x + col * (cell + gap);
-            const float t = top + row * (cell + gap);
-            rt->FillRectangle(D2D1::RectF(l, t, l + cell, t + cell), brush);
-        }
-    }
-}
-
-void FillCloud(ID2D1RenderTarget* rt, D2D1_POINT_2F c, float s, ID2D1Brush* brush) {
-    const D2D1_RECT_F base = D2D1::RectF(c.x - 0.44f * s, c.y + 0.02f * s, c.x + 0.44f * s, c.y + 0.21f * s);
-    rt->FillRoundedRectangle(D2D1::RoundedRect(base, 0.10f * s, 0.10f * s), brush);
-    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(c.x - 0.24f * s, c.y + 0.02f * s), 0.18f * s, 0.18f * s), brush);
-    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(c.x - 0.01f * s, c.y - 0.10f * s), 0.24f * s, 0.24f * s), brush);
-    rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(c.x + 0.25f * s, c.y + 0.03f * s), 0.17f * s, 0.17f * s), brush);
-}
-
-void DrawSun(ID2D1RenderTarget* rt, D2D1_POINT_2F c, float s, ID2D1Brush* brush) {
-    rt->FillEllipse(D2D1::Ellipse(c, 0.22f * s, 0.22f * s), brush);
-    const float inner = 0.32f * s;
-    const float outer = 0.46f * s;
-    for (int i = 0; i < 8; ++i) {
-        const float a = static_cast<float>(i) * 3.14159265f / 4.0f;
-        rt->DrawLine(D2D1::Point2F(c.x + std::cos(a) * inner, c.y + std::sin(a) * inner),
-                     D2D1::Point2F(c.x + std::cos(a) * outer, c.y + std::sin(a) * outer), brush,
-                     std::max(1.0f, 0.07f * s));
-    }
-}
-
-// Monochrome weather symbol in a box of size s centred on c. `cut` is the bar's
-// colour, used to separate overlapping shapes on a solid bar.
-void DrawWeather(ID2D1RenderTarget* rt, ID2D1Factory* factory, D2D1_POINT_2F c, float s, WeatherVisual visual,
-                 ID2D1SolidColorBrush* brush, const D2D1_COLOR_F& fg, const D2D1_COLOR_F& cut, bool solid,
-                 IDWriteTextFormat* icons) {
-    brush->SetColor(fg);
-    const float stroke = std::max(1.0f, 0.075f * s);
-    const D2D1_POINT_2F raised = D2D1::Point2F(c.x, c.y - 0.14f * s);
-    switch (visual) {
-        case WeatherVisual::Clear:
-            DrawSun(rt, c, s, brush);
-            break;
-        case WeatherVisual::PartlyCloudy: {
-            DrawSun(rt, D2D1::Point2F(c.x + 0.16f * s, c.y - 0.16f * s), s * 0.72f, brush);
-            const D2D1_POINT_2F cloud = D2D1::Point2F(c.x - 0.06f * s, c.y + 0.08f * s);
-            if (solid) {  // a thin gap between sun and cloud, like the SF Symbol
-                brush->SetColor(cut);
-                FillCloud(rt, cloud, s * 1.12f, brush);
-                brush->SetColor(fg);
-            }
-            FillCloud(rt, cloud, s * 0.92f, brush);
-            break;
-        }
-        case WeatherVisual::Cloudy:
-            FillCloud(rt, c, s, brush);
-            break;
-        case WeatherVisual::Fog:
-            FillCloud(rt, raised, s * 0.9f, brush);
-            for (int i = 0; i < 2; ++i) {
-                const float y = c.y + (0.24f + 0.16f * i) * s;
-                rt->DrawLine(D2D1::Point2F(c.x - 0.36f * s, y), D2D1::Point2F(c.x + 0.36f * s, y), brush, stroke);
-            }
-            break;
-        case WeatherVisual::Rain:
-            FillCloud(rt, raised, s * 0.9f, brush);
-            for (int i = -1; i <= 1; ++i) {
-                const float x = c.x + 0.22f * s * i;
-                rt->DrawLine(D2D1::Point2F(x + 0.05f * s, c.y + 0.22f * s),
-                             D2D1::Point2F(x - 0.05f * s, c.y + 0.44f * s), brush, stroke);
-            }
-            break;
-        case WeatherVisual::Snow:
-            FillCloud(rt, raised, s * 0.9f, brush);
-            for (int i = -1; i <= 1; ++i) {
-                const float r = 0.055f * s;
-                rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(c.x + 0.22f * s * i, c.y + 0.32f * s), r, r),
-                                brush);
-            }
-            break;
-        case WeatherVisual::Storm: {
-            FillCloud(rt, raised, s * 0.9f, brush);
-            ComPtr<ID2D1PathGeometry> bolt;
-            ComPtr<ID2D1GeometrySink> sink;
-            if (SUCCEEDED(factory->CreatePathGeometry(bolt.GetAddressOf())) &&
-                SUCCEEDED(bolt->Open(sink.GetAddressOf()))) {
-                const float y0 = c.y + 0.12f * s;
-                sink->BeginFigure(D2D1::Point2F(c.x + 0.06f * s, y0), D2D1_FIGURE_BEGIN_FILLED);
-                sink->AddLine(D2D1::Point2F(c.x - 0.10f * s, y0 + 0.22f * s));
-                sink->AddLine(D2D1::Point2F(c.x + 0.00f * s, y0 + 0.22f * s));
-                sink->AddLine(D2D1::Point2F(c.x - 0.06f * s, y0 + 0.40f * s));
-                sink->AddLine(D2D1::Point2F(c.x + 0.13f * s, y0 + 0.14f * s));
-                sink->AddLine(D2D1::Point2F(c.x + 0.03f * s, y0 + 0.14f * s));
-                sink->AddLine(D2D1::Point2F(c.x + 0.10f * s, y0));
-                sink->EndFigure(D2D1_FIGURE_END_CLOSED);
-                sink->Close();
-                rt->FillGeometry(bolt.Get(), brush);
-            }
-            break;
-        }
-        case WeatherVisual::Unknown:
-        default: {
-            const std::wstring glyph = kGlyphThermometer;
-            rt->DrawTextW(glyph.c_str(), 1, icons, D2D1::RectF(c.x - s, c.y - s, c.x + s, c.y + s), brush,
-                          D2D1_DRAW_TEXT_OPTIONS_NONE);
-            break;
-        }
-    }
-}
-
-const wchar_t* NetworkGlyph(const BarStatus::Model& m) {
-    switch (m.net) {
-        case BarStatus::Net::Wifi: return kGlyphWifi[std::clamp(m.wifiLevel, 1, 4) - 1];
-        case BarStatus::Net::Ethernet: return kGlyphEthernet;
-        case BarStatus::Net::Offline:
-        default: return kGlyphOffline;
-    }
-}
-
-const wchar_t* VolumeGlyph(const BarStatus::Model& m) {
-    if (m.muted) return kGlyphMute;
-    if (m.volume <= 0) return kGlyphVolume[0];
-    if (m.volume < 34) return kGlyphVolume[1];
-    if (m.volume < 67) return kGlyphVolume[2];
-    return kGlyphVolume[3];
-}
-
-void Paint(ID2D1RenderTarget* rt, ID2D1Factory* factory, D2D1_SIZE_F size, const Settings& s,
-           const BarStatus::Model& model, bool solid, float leftShift, float rightShift, Metrics* out) {
+void Paint(ID2D1RenderTarget* rt, D2D1_SIZE_F size, const BarStatus::Model& model, bool glass, float scale,
+           const ItemVisual* visuals, Metrics* out) {
     *out = Metrics{};
-    const float k = std::max(0.05f, s.sizeScale);
-    if (!EnsureFormats(k)) return;
-    if (!g_res.brush &&
-        FAILED(rt->CreateSolidColorBrush(D2D1::ColorF(1.0f, 1.0f, 1.0f, 1.0f), g_res.brush.GetAddressOf()))) {
-        return;
-    }
-    ID2D1SolidColorBrush* brush = g_res.brush.Get();
-    IDWriteTextFormat* text = g_res.text.Get();
-    IDWriteTextFormat* bold = g_res.bold.Get();
-    IDWriteTextFormat* icons = g_res.icons.Get();
+    const float k = std::max(0.05f, scale);
+    if (!g_brush && FAILED(rt->CreateSolidColorBrush(Design::kBarInk, g_brush.GetAddressOf()))) return;
+    ID2D1SolidColorBrush* brush = g_brush.Get();
+    IDWriteTextFormat* icons16 = DesignType::Icons(Design::kBarIcon, k);
+    IDWriteTextFormat* icons20 = DesignType::Icons(Design::kBatteryGlyph, k);
+    if (!icons16 || !icons20) return;
 
     const float width = size.width;
     const float height = size.height;
     const float cy = height * 0.5f;
-    D2D1_COLOR_F fg = s.textPrimaryColor;
-    fg.a = 1.0f;
-    D2D1_COLOR_F dim = fg;
-    dim.a = 0.4f;
-    D2D1_COLOR_F cut = s.pillBgColor;
-    cut.a = 1.0f;
-    const float gap = kItemGap * k;
-    const float hitPad = kHitPad * k;
+    const D2D1_COLOR_F ink = glass ? Design::kGlassInk : Design::kBarInk;
+    const D2D1_COLOR_F ink2 = glass ? WithAlpha(ink, 0.6f) : Design::kBarInk2;
+    const float itemPad = Design::kItemPadX * k;
+    const float statusPad = Design::kStatusPadX * k;
+    const float iconBox = Design::kBarIcon * k;
 
+    // ── Measure: text layouts and item boxes ─────────────────────────────────
+    using DesignType::Layout;
+    using DesignType::Width;
+    using T = Design::Text;
+    auto setBox = [&](Item item, float l, float r) {
+        out->present[item] = true;
+        out->boxes[item] = D2D1::RectF(l, 0.0f, r, height);
+    };
+
+    float x = Design::kBarPadX * k;
+    setBox(kLogo, x, x + itemPad * 2.0f + Design::kBarLogo * k);
+    x = out->boxes[kLogo].right;
+
+    ComPtr<IDWriteTextLayout> appText;
+    if (!model.appName.empty()) {
+        appText = Layout(model.appName, T::BarApp, k, 10000.0f, height);
+        setBox(kApp, x, x + itemPad * 2.0f + Width(appText.Get()));
+        x = out->boxes[kApp].right;
+    }
+
+    ComPtr<IDWriteTextLayout> tempText;
+    if (model.weatherValid) {
+        tempText = Layout(std::to_wstring(model.temperature) + L"°", T::BarMenu, k, 10000.0f, height);
+        setBox(kWeather, x,
+               x + itemPad * 2.0f + iconBox + Design::kTextIconGap * k + Width(tempText.Get()));
+    }
+
+    float r = width - Design::kBarPadX * k;
+    const float gap = Design::kStatusGap * k;
+    auto placeRight = [&](Item item, float boxWidth) {
+        setBox(item, r - boxWidth, r);
+        r -= boxWidth + gap;
+    };
+    ComPtr<IDWriteTextLayout> dateText;
+    if (!model.date.empty()) {
+        dateText = Layout(model.date, T::BarMenu, k, 10000.0f, height, 1, true);
+        placeRight(kDate, itemPad * 2.0f + Width(dateText.Get()));
+    }
+    ComPtr<IDWriteTextLayout> layoutText;
+    if (!model.layout.empty()) {
+        layoutText = Layout(model.layout, T::BarLayout, k, Design::kLayoutBoxW * k, height);
+        if (layoutText) layoutText->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        placeRight(kLayout, statusPad * 2.0f + Design::kLayoutBoxW * k);
+    }
+    ComPtr<IDWriteTextLayout> batteryText;
+    wchar_t batteryGlyph = 0;
+    float batteryGlyphW = 0.0f;
+    if (model.hasBattery) {
+        batteryText = Layout(std::to_wstring(model.battery) + L"%", T::BarMenu, k, 10000.0f, height, 1, true);
+        const int index = Design::BatteryIndex(model.battery);
+        batteryGlyph = model.charging ? Design::kGlyphBatteryCharging[index] : Design::kGlyphBattery[index];
+        batteryGlyphW = GlyphWidth(batteryGlyph, Design::kBatteryGlyph, k);
+        placeRight(kBattery, statusPad * 2.0f + Width(batteryText.Get()) + Design::kTextIconGap * k + batteryGlyphW);
+    }
+    if (model.hasAudio) placeRight(kVolume, statusPad * 2.0f + iconBox);
+    placeRight(kNetwork, statusPad * 2.0f + iconBox);
+    if (model.bluetooth >= 0) placeRight(kBluetooth, statusPad * 2.0f + iconBox);
+
+    // ── Draw: every item under its own hide transform ────────────────────────
     D2D1_MATRIX_3X2_F base;
     rt->GetTransform(&base);
-    auto record = [&](Item item, float left, float right, float shift) {
-        out->present[item] = true;
-        out->rects[item] = D2D1::RectF(left - hitPad + shift, 0.0f, right + hitPad + shift, height);
+    auto begin = [&](Item item) {
+        const ItemVisual& v = visuals[item];
+        const D2D1_RECT_F& box = out->boxes[item];
+        const float s = Design::kBarItemsHiddenScale + (1.0f - Design::kBarItemsHiddenScale) * v.alpha;
+        rt->SetTransform(D2D1::Matrix3x2F::Scale(s, s, D2D1::Point2F((box.left + box.right) * 0.5f, cy)) *
+                         D2D1::Matrix3x2F::Translation(v.dx, 0.0f) * base);
+        return v.alpha;
+    };
+    auto glyphAt = [&](wchar_t glyph, IDWriteTextFormat* format, float left, float w, const D2D1_COLOR_F& c) {
+        brush->SetColor(c);
+        rt->DrawTextW(&glyph, 1, format, D2D1::RectF(left, 0.0f, left + w, height), brush,
+                      D2D1_DRAW_TEXT_OPTIONS_NONE);
     };
 
-    // ── Left group, laid out from the left edge ─────────────────────────────
-    rt->SetTransform(D2D1::Matrix3x2F::Translation(leftShift, 0.0f) * base);
-    float x = kEdgePad * k;
-    brush->SetColor(fg);
-    const float logo = kLogoSize * k;
-    DrawWindowsLogo(rt, x, cy, logo, brush);
-    record(kLogo, x, x + logo, leftShift);
-    x += logo + kLogoGap * k;
-
-    if (!model.appName.empty()) {
-        const float w = std::min(TextWidth(model.appName, bold), kAppMaxWidth * k);
-        DrawTextAt(rt, model.appName, bold, x, w, height, brush);
-        record(kApp, x, x + w, leftShift);
-        x += w + gap;
+    {  // Windows logo: 2 x 2 squares of (14 - 1) / 2, gap 1
+        const float a = begin(kLogo);
+        if (a > 0.003f) {
+            brush->SetColor(WithAlpha(ink, a));
+            const float size14 = Design::kBarLogo * k;
+            const float gap1 = 1.0f * k;
+            const float cell = (size14 - gap1) * 0.5f;
+            const float left = out->boxes[kLogo].left + itemPad;
+            const float top = cy - size14 * 0.5f;
+            for (int row = 0; row < 2; ++row) {
+                for (int col = 0; col < 2; ++col) {
+                    const float l = left + col * (cell + gap1);
+                    const float t = top + row * (cell + gap1);
+                    rt->FillRectangle(D2D1::RectF(l, t, l + cell, t + cell), brush);
+                }
+            }
+        }
     }
-    if (model.weatherValid) {
-        const float icon = kIconSize * k;
-        DrawWeather(rt, factory, D2D1::Point2F(x + icon * 0.5f, cy), icon * 1.15f,
-                    WeatherVisualFromCode(model.weatherCode), brush, fg, cut, solid, icons);
-        brush->SetColor(fg);
-        const std::wstring temp = std::to_wstring(model.temperature) + L"°";
-        const float tw = TextWidth(temp, text);
-        const float tx = x + icon + kIconTextGap * k;
-        DrawTextAt(rt, temp, text, tx, tw, height, brush);
-        record(kWeather, x, tx + tw, leftShift);
-        x = tx + tw + gap;
+    if (appText) {
+        const float a = begin(kApp);
+        brush->SetColor(WithAlpha(ink, a));
+        rt->DrawTextLayout(D2D1::Point2F(out->boxes[kApp].left + itemPad, 0.0f), appText.Get(), brush);
     }
-    out->leftEnd = x - gap;
-
-    // ── Right group, laid out from the right edge ───────────────────────────
-    rt->SetTransform(D2D1::Matrix3x2F::Translation(rightShift, 0.0f) * base);
-    float r = width - kEdgePad * k;
-    auto placeText = [&](Item item, const std::wstring& label) {
-        const float w = TextWidth(label, text);
-        r -= w;
-        brush->SetColor(fg);
-        DrawTextAt(rt, label, text, r, w, height, brush);
-        record(item, r, r + w, rightShift);
-        r -= gap;
-    };
-    auto placeIcon = [&](Item item, const wchar_t* glyph, const D2D1_COLOR_F& color) {
-        const std::wstring g = glyph;
-        const float w = TextWidth(g, icons);
-        r -= w;
-        brush->SetColor(color);
-        DrawTextAt(rt, g, icons, r, w, height, brush);
-        record(item, r, r + w, rightShift);
-        r -= gap;
-    };
-
-    if (!model.date.empty()) placeText(kDate, model.date);
-    if (!model.layout.empty()) placeText(kLayout, model.layout);
-    if (model.hasBattery) {
-        const std::wstring pct = std::to_wstring(model.battery) + L"%";
-        const int level = std::clamp(static_cast<int>(std::lround(model.battery / 10.0)), 0, 10);
-        const std::wstring glyph(1, static_cast<wchar_t>((model.charging ? kBatteryChargingBase : kBatteryBase) + level));
-        const float tw = TextWidth(pct, text);
-        const float iw = TextWidth(glyph, icons);
-        const float right = r;
-        r -= tw;
-        brush->SetColor(fg);
-        DrawTextAt(rt, pct, text, r, tw, height, brush);
-        r -= kIconTextGap * k + iw;
-        DrawTextAt(rt, glyph, icons, r, iw, height, brush);
-        record(kBattery, r, right, rightShift);
-        r -= gap;
+    if (tempText) {
+        const float a = begin(kWeather);
+        const float left = out->boxes[kWeather].left + itemPad;
+        const WeatherVisual visual = WeatherVisualFromCode(model.weatherCode);
+        glyphAt(visual == WeatherVisual::Clear ? Design::kGlyphBrightness : Design::kGlyphCloud, icons16, left,
+                iconBox, WithAlpha(ink, a));
+        brush->SetColor(WithAlpha(ink2, a));
+        rt->DrawTextLayout(D2D1::Point2F(left + iconBox + Design::kTextIconGap * k, 0.0f), tempText.Get(), brush);
     }
-    if (model.hasAudio) placeIcon(kVolume, VolumeGlyph(model), fg);
-    placeIcon(kNetwork, NetworkGlyph(model), fg);
-    if (model.bluetooth >= 0) placeIcon(kBluetooth, kGlyphBluetooth, model.bluetooth ? fg : dim);
-    out->rightStart = r + gap;
+    if (dateText) {
+        const float a = begin(kDate);
+        brush->SetColor(WithAlpha(ink, a));
+        rt->DrawTextLayout(D2D1::Point2F(out->boxes[kDate].left + itemPad, 0.0f), dateText.Get(), brush);
+    }
+    if (layoutText) {
+        const float a = begin(kLayout);
+        const float l = out->boxes[kLayout].left + statusPad;
+        const float w = Design::kLayoutBoxW * k;
+        const float h = Design::kLayoutBoxH * k;
+        const float stroke = Design::kLayoutBoxStroke * k;
+        brush->SetColor(WithAlpha(ink, a));
+        const D2D1_RECT_F frame = D2D1::RectF(l + stroke * 0.5f, cy - h * 0.5f + stroke * 0.5f,
+                                              l + w - stroke * 0.5f, cy + h * 0.5f - stroke * 0.5f);
+        const float radius = Design::kRadiusLayoutBox * k;
+        rt->DrawRoundedRectangle(D2D1::RoundedRect(frame, radius, radius), brush, stroke);
+        rt->DrawTextLayout(D2D1::Point2F(l, 0.0f), layoutText.Get(), brush);
+    }
+    if (batteryText) {
+        const float a = begin(kBattery);
+        const float l = out->boxes[kBattery].left + statusPad;
+        const bool low = model.battery <= 10 && !model.charging;
+        brush->SetColor(WithAlpha(low ? Design::kRed : ink, a));
+        rt->DrawTextLayout(D2D1::Point2F(l, 0.0f), batteryText.Get(), brush);
+        const float gx = l + Width(batteryText.Get()) + Design::kTextIconGap * k;
+        glyphAt(batteryGlyph, icons20, gx, batteryGlyphW, WithAlpha(ink, a));
+    }
+    if (out->present[kVolume]) {
+        const float a = begin(kVolume);
+        glyphAt(Design::VolumeGlyph(model.volume, model.muted), icons16, out->boxes[kVolume].left + statusPad,
+                iconBox, WithAlpha(ink, a));
+    }
+    {  // Wi-Fi: ghost at 0.30 under the level (glyphRules.wifi); Ethernet has its own glyph
+        const float a = begin(kNetwork);
+        const float l = out->boxes[kNetwork].left + statusPad;
+        if (model.net == BarStatus::Net::Ethernet) {
+            glyphAt(0xE839, icons16, l, iconBox, WithAlpha(ink, a));  // Ethernet: not in the tokens
+        } else {
+            const int level = model.net == BarStatus::Net::Wifi ? std::clamp(model.wifiLevel, 1, 4) : 0;
+            if (level == 4) {
+                glyphAt(Design::kGlyphWifi, icons16, l, iconBox, WithAlpha(ink, a));
+            } else {
+                glyphAt(Design::kGlyphWifi, icons16, l, iconBox, WithAlpha(ink, a * Design::kWifiGhostAlpha));
+                if (level > 0) glyphAt(Design::kGlyphWifiLevel[level - 1], icons16, l, iconBox, WithAlpha(ink, a));
+            }
+        }
+    }
+    if (out->present[kBluetooth]) {
+        const float a = begin(kBluetooth) * (model.bluetooth ? 1.0f : Design::kDimAlpha);
+        glyphAt(Design::kGlyphBluetooth, icons16, out->boxes[kBluetooth].left + statusPad, iconBox,
+                WithAlpha(ink, a));
+    }
 
     rt->SetTransform(base);
     out->valid = true;
@@ -14415,6 +14579,11 @@ class Renderer {
                           initialSettings.textScale);
 
         return CreateBackingBitmap(520, 140);
+    }
+
+    void SetNotchShape(float radiusBottom, float radiusEar) {
+        notchRadius_ = radiusBottom;
+        notchEar_ = radiusEar;
     }
 
     bool Render(const SharedState& state, const Settings& settings, const Activity& primary,
@@ -14717,45 +14886,6 @@ class Renderer {
         total = std::ceil(total / IdleStripLayout::kWidthQuantum) * IdleStripLayout::kWidthQuantum;
         metrics.totalWidth = Clamp(total, IdleStripLayout::kMinWidth, IdleStripLayout::kMaxWidth);
         return metrics;
-    }
-
-    // Bar notch media pill: [cover | time | visualiser], with the time on the
-    // notch's centre line so it stays put while the notch widens out of the
-    // resting time-only notch. Content px; 0 when the bar notch is not active.
-    float MeasureNotchMediaWidth(const SharedState& state, const Settings& settings) {
-        const float restH = BarNotchHeight(settings);
-        if (restH <= 0.0f) return 0.0f;
-        EnsureTextFormats(settings.sizeScale, settings.fontFamily, settings.textScale);
-        IDWriteTextFormat* fmt = idleTextFormat_ ? idleTextFormat_.Get() : smallTextFormat_.Get();
-        SYSTEMTIME local = {};
-        GetLocalTime(&local);
-        const std::wstring clock = FormatIslandTime(local, settings.clockFollowSystem,
-                                                    settings.use24HourClock, settings.showSeconds);
-        const float clockW = MeasureTextWidthCached(WidestDigitForm(clock), fmt, idleClockWidthCache_);
-        const NotchMediaSides sides = NotchMediaSideWidths(state, settings, restH);
-        float total = clockW + 2.0f * std::max(sides.left, sides.right);
-        total = std::ceil(total / MediaPillLayout::kWidthQuantum) * MediaPillLayout::kWidthQuantum;
-        return total;
-    }
-
-    // Room each side of the centred time needs, content px, including the gap
-    // to the time. Shared by the sizer above and DrawMedia.
-    struct NotchMediaSides {
-        float left = 0.0f;
-        float right = 0.0f;
-    };
-    static NotchMediaSides NotchMediaSideWidths(const SharedState& state, const Settings& settings,
-                                                float restH) {
-        constexpr float kArtPad = 6.0f;
-        constexpr float kGap = 12.0f;
-        NotchMediaSides sides;
-        sides.left = kArtPad + std::max(8.0f, restH - kArtPad * 2.0f) + kGap;
-        // Matches DrawMedia's waveRect: 28 wide, 14 from the edge, shifted 22 for
-        // a privacy dot.
-        const bool privacy = state.system.micActive || state.system.cameraActive;
-        sides.right = 14.0f + 28.0f + (privacy ? 22.0f : 0.0f) + kGap;
-        (void)settings;
-        return sides;
     }
 
     // Collapsed media pill, with the optional clock. Returns content-space
@@ -15421,6 +15551,10 @@ class Renderer {
 
     void DrawPill(const SharedState& state, const Settings& settings, const Activity& activity,
                   D2D1_RECT_F rect, float scale, double now) {
+        // Bar notch: the island is glued to the bar line, so it never "breathes"
+        // on hover, and its corners come from the design's animated radiusBottom.
+        const bool barNotch = BarNotchHeightPx(settings) > 0.0f;
+        if (barNotch) scale = 1.0f;
         const float cx = (rect.left + rect.right) * 0.5f;
         const float cy = (rect.top + rect.bottom) * 0.5f;
         const float w = (rect.right - rect.left) * scale;
@@ -15428,7 +15562,9 @@ class Renderer {
         rect = D2D1::RectF(cx - w * 0.5f, cy - h * 0.5f, cx + w * 0.5f, cy + h * 0.5f);
 
         float radius = settings.w11Style ? 8.0f * settings.sizeScale : (rect.bottom - rect.top) * 0.5f;
-        if (settings.notchStyle) {
+        if (barNotch) {
+            radius = notchRadius_;
+        } else if (settings.notchStyle) {
             radius = 16.0f * settings.sizeScale;
         } else if (!settings.w11Style) {
             radius = std::min(radius, 44.0f * settings.sizeScale);
@@ -15457,11 +15593,11 @@ class Renderer {
 
         DrawPillSurface(rect, radius, activity.kind, settings);
 
-        if (activity.kind == IslandKind::Progress) {
+        if (activity.kind == IslandKind::Progress && !barNotch) {
             DrawProgressRing(rect, state.progress.percent);
         }
 
-        if (activity.kind == IslandKind::BatteryLow) {
+        if (activity.kind == IslandKind::BatteryLow && !barNotch) {
             const float pulse = 0.5f + 0.5f * std::sin(static_cast<float>(now * 2.0 * 3.14159265 * 2.1));
             redBrush_->SetOpacity(0.45f + 0.45f * pulse);
             DrawIslandShape(rect, radius, settings.w11Style, settings.notchStyle, redBrush_.Get(), 2.0f);
@@ -15497,7 +15633,13 @@ class Renderer {
             }
         }
 
-        if (drawContent) switch (activity.kind) {
+        // Bar notch: every alert is the design's notification state -- time in the
+        // bar band, the card as a banner below it.
+        const bool notchAlert = barNotch && IsNotchAlert(activity.kind);
+        if (drawContent && notchAlert) {
+            DrawNotchAlert(state, activity.kind, unscaledRect, settings, now);
+        }
+        if (drawContent && !notchAlert) switch (activity.kind) {
             case IslandKind::Media:
                 DrawMedia(state, unscaledRect, settings, now);
                 break;
@@ -15803,7 +15945,232 @@ class Renderer {
     // Each layer is individually subtle; together they give the pill depth
     // instead of the flat single-fill look it had before. Deliberately absent:
     // any bright rim, hairline or sheen tracing the island's edge.
+    // ── Bar notch ─────────────────────────────────────────────────────────────
+    // components.md "Геометрия оболочки": the island flows out of the bar line
+    // y0 (bar height on a solid bar, the screen top on a translucent one) with
+    // concave "ears" of radius e and bottom corners of radius r. On a solid bar
+    // nothing is drawn until it drops below the bar -- black on black.
+    void DrawNotchShell(D2D1_RECT_F rect, const Settings& settings) {
+        const float barPx = BarNotchHeightPx(settings);
+        const float y0 = settings.topBarSolid ? rect.top + barPx : rect.top;
+        const float avail = rect.bottom - y0;
+        if (avail <= 0.5f) return;
+        const float L = rect.left;
+        const float R = rect.right;
+        const float H = rect.bottom;
+        const float e = std::max(0.0f, std::min(notchEar_, avail * 0.5f));
+        const float r = std::max(0.0f, std::min({notchRadius_, (R - L) * 0.5f, avail - e}));
+
+        ComPtr<ID2D1PathGeometry> path;
+        ComPtr<ID2D1GeometrySink> sink;
+        if (FAILED(d2dFactory_->CreatePathGeometry(path.GetAddressOf())) ||
+            FAILED(path->Open(sink.GetAddressOf()))) {
+            return;
+        }
+        auto arc = [&](float x, float y, float radius, D2D1_SWEEP_DIRECTION dir) {
+            if (radius > 0.01f) {
+                sink->AddArc(D2D1::ArcSegment(D2D1::Point2F(x, y), D2D1::SizeF(radius, radius), 0.0f, dir,
+                                              D2D1_ARC_SIZE_SMALL));
+            } else {
+                sink->AddLine(D2D1::Point2F(x, y));
+            }
+        };
+        sink->BeginFigure(D2D1::Point2F(L - e, y0), D2D1_FIGURE_BEGIN_FILLED);
+        arc(L, y0 + e, e, D2D1_SWEEP_DIRECTION_CLOCKWISE);
+        sink->AddLine(D2D1::Point2F(L, H - r));
+        arc(L + r, H, r, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE);
+        sink->AddLine(D2D1::Point2F(R - r, H));
+        arc(R, H - r, r, D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE);
+        sink->AddLine(D2D1::Point2F(R, y0 + e));
+        arc(R + e, y0, e, D2D1_SWEEP_DIRECTION_CLOCKWISE);
+        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+        if (FAILED(sink->Close())) return;
+        if (ID2D1SolidColorBrush* brush = AcquireBrush(Design::kIslandBg)) {
+            target_->FillGeometry(path.Get(), brush);
+        }
+    }
+
+    // island-time, centred in the bar band at the top of `rect` (content px).
+    void DrawNotchTime(D2D1_RECT_F rect, const Settings& settings) {
+        const float band = BarNotchHeight(settings);
+        if (band <= 0.0f) return;
+        SYSTEMTIME local = {};
+        GetLocalTime(&local);
+        const std::wstring text = FormatIslandTime(local, settings.clockFollowSystem, settings.use24HourClock,
+                                                   settings.showSeconds);
+        ComPtr<IDWriteTextLayout> layout =
+            DesignType::Layout(text, Design::Text::IslandTime, 1.0f, rect.right - rect.left, band);
+        if (!layout) return;
+        layout->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        if (ID2D1SolidColorBrush* brush = AcquireBrush(WithAlpha(Design::kBarInk, settingsOpacity_))) {
+            target_->DrawTextLayout(D2D1::Point2F(rect.left, rect.top), layout.Get(), brush);
+        }
+    }
+
+    // Compact visualiser (components.md "Музыка"): 4 bars of 3 px, gap 2, 3..14 px
+    // tall, right edge at R - 6 - 4, centred on the band, in the cover's dominant
+    // colour. Each bar is a viz.bar spring re-targeted every 150 ms -- from the
+    // live spectrum while playing, to the minimum when paused.
+    void DrawNotchViz(const SharedState& state, D2D1_RECT_F rect, const Settings& settings, double now) {
+        const float band = BarNotchHeight(settings);
+        const float right = rect.right - Design::kCompactInset - Design::kVizRightInset;
+        const float left = right - (4.0f * Design::kVizBarW + 3.0f * Design::kVizGap);
+        const float cy = rect.top + band * 0.5f;
+        const float dt = notchVizLast_ < 0.0 ? 0.0f : Clamp(static_cast<float>(now - notchVizLast_), 0.0f, 0.05f);
+        notchVizLast_ = now;
+        if (now >= notchVizRetargetAt_) {
+            notchVizRetargetAt_ = now + Design::kVizRetargetSec;
+            const size_t n = state.bands.size();
+            for (size_t i = 0; i < 4; ++i) {
+                float level = 0.0f;
+                if (state.media.playing && n >= 4) {
+                    const size_t from = i * n / 4;
+                    const size_t to = (i + 1) * n / 4;
+                    float sum = 0.0f;
+                    for (size_t j = from; j < to; ++j) sum += state.bands[j];
+                    level = Clamp(std::sqrt(sum / static_cast<float>(to - from)) * 1.15f, 0.0f, 1.0f);
+                }
+                notchViz_[i].target = Design::kVizMinH + (Design::kVizMaxH - Design::kVizMinH) * level;
+            }
+        }
+        bool moving = false;
+        for (SpringValue& bar : notchViz_) {
+            bar.Step(dt, Design::kVizBar.stiffness, Design::kVizBar.damping);
+            moving = moving || std::fabs(bar.value - bar.target) > 0.01f || std::fabs(bar.velocity) > 0.1f;
+        }
+        if (moving && !state.media.playing) g_layoutDirty = true;  // let a paused viz settle
+        D2D1_COLOR_F color = currentAccent_;
+        color.a = settingsOpacity_;
+        ID2D1SolidColorBrush* brush = AcquireBrush(color);
+        if (!brush) return;
+        for (int i = 0; i < 4; ++i) {
+            const float h = Clamp(notchViz_[i].value, 2.0f, Design::kVizMaxH + 3.0f);
+            const float x = left + i * (Design::kVizBarW + Design::kVizGap);
+            target_->FillRoundedRectangle(
+                D2D1::RoundedRect(D2D1::RectF(x, cy - h * 0.5f, x + Design::kVizBarW, cy + h * 0.5f),
+                                  Design::kVizBarRadius, Design::kVizBarRadius),
+                brush);
+        }
+    }
+
+    static bool IsNotchAlert(IslandKind kind) {
+        switch (kind) {
+            case IslandKind::Clipboard:
+            case IslandKind::Notification:
+            case IslandKind::Volume:
+            case IslandKind::Brightness:
+            case IslandKind::CapsLock:
+            case IslandKind::Device:
+            case IslandKind::Bluetooth:
+            case IslandKind::Timer:
+            case IslandKind::BatteryLow:
+            case IslandKind::Progress:
+            case IslandKind::DoNotDisturb:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // Notification state (components.md "Уведомление"): the time stays in the
+    // band, the card is a banner in y = bar..H, 20 px side padding, 4 px bottom,
+    // vertically centred. A real notification gets the design's layout; the other
+    // alerts reuse their own cards in that box (their badge lands on L + 20 at
+    // 36 px). The banner fades in as the island drops past the bar.
+    void DrawNotchAlert(const SharedState& state, IslandKind kind, D2D1_RECT_F rect, const Settings& settings,
+                        double now) {
+        DrawNotchTime(rect, settings);
+        const float bodyTop = rect.top + BarNotchHeight(settings);
+        const float bodyBottom = rect.bottom - 4.0f;
+        const float alpha = Clamp((bodyBottom - bodyTop - 24.0f) / 36.0f, 0.0f, 1.0f);
+        if (alpha <= 0.01f) return;
+        ID2D1Layer* layer = alpha < 0.99f ? AcquireLayer() : nullptr;
+        if (layer) {
+            target_->PushLayer(D2D1::LayerParameters(D2D1::InfiniteRect(), nullptr, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+                                                      D2D1::IdentityMatrix(), alpha, nullptr,
+                                                      D2D1_LAYER_OPTIONS_NONE),
+                               layer);
+        }
+        if (kind == IslandKind::Notification) {
+            DrawNotchNotification(state, rect, bodyTop, bodyBottom);
+        } else {
+            const float cy = (bodyTop + bodyBottom) * 0.5f;
+            const float h = Design::kNotifyIcon + 16.0f;  // the cards size their badge as height - 16
+            const D2D1_RECT_F body = D2D1::RectF(rect.left + Design::kIslandPad - 14.0f, cy - h * 0.5f,
+                                                 rect.right - Design::kIslandPad + 14.0f, cy + h * 0.5f);
+            switch (kind) {
+                case IslandKind::Clipboard: DrawClipboard(state, body); break;
+                case IslandKind::Volume: DrawVolume(state, body); break;
+                case IslandKind::Brightness: DrawBrightness(state, body); break;
+                case IslandKind::CapsLock: DrawCapsLock(state, body); break;
+                case IslandKind::Device: DrawDevice(state, body); break;
+                case IslandKind::Bluetooth: DrawBluetoothDevice(state, body); break;
+                case IslandKind::Timer: DrawTimer(state, body); break;
+                case IslandKind::BatteryLow: DrawBattery(state, body); break;
+                case IslandKind::Progress: DrawProgress(state, body); break;
+                case IslandKind::DoNotDisturb: DrawDoNotDisturb(state, body); break;
+                default: break;
+            }
+        }
+        (void)now;
+        if (layer) target_->PopLayer();
+    }
+
+    void DrawNotchNotification(const SharedState& state, D2D1_RECT_F rect, float bodyTop, float bodyBottom) {
+        const float cy = (bodyTop + bodyBottom) * 0.5f;
+        const float iconLeft = rect.left + Design::kIslandPad;
+        const D2D1_RECT_F icon = D2D1::RectF(iconLeft, cy - Design::kNotifyIcon * 0.5f,
+                                             iconLeft + Design::kNotifyIcon, cy + Design::kNotifyIcon * 0.5f);
+        if (state.notification.icon) {
+            DrawRoundedBitmapPixels(*state.notification.icon, icon, Design::kRadiusNotifyIcon,
+                                    notificationIconBitmap_, notificationIconGeneration_, 1.0f);
+        } else if (ID2D1SolidColorBrush* plate = AcquireBrush(Design::kAccent)) {
+            target_->FillRoundedRectangle(
+                D2D1::RoundedRect(icon, Design::kRadiusNotifyIcon, Design::kRadiusNotifyIcon), plate);
+            const wchar_t glyph = 0xE715;  // Mail
+            if (IDWriteTextFormat* icons = DesignType::Icons(Design::kNotifyIconGlyph, 1.0f)) {
+                if (ID2D1SolidColorBrush* ink = AcquireBrush(Design::kOnAccent)) {
+                    target_->DrawTextW(&glyph, 1, icons, icon, ink, D2D1_DRAW_TEXT_OPTIONS_NONE);
+                }
+            }
+        }
+
+        const float textLeft = icon.right + Design::kIslandRowGap;
+        const float textWidth = std::max(10.0f, rect.right - Design::kIslandPad - textLeft);
+        const Design::TextSpec& titleSpec = Design::kText[static_cast<int>(Design::Text::IslandNotifyTitle)];
+        const Design::TextSpec& bodySpec = Design::kText[static_cast<int>(Design::Text::IslandNotifyBody)];
+
+        ComPtr<IDWriteTextLayout> meta =
+            DesignType::Layout(Loc(L"now"), Design::Text::IslandMeta, 1.0f, textWidth, titleSpec.lineHeight);
+        const float metaWidth = DesignType::Width(meta.Get());
+        const std::wstring& heading = state.notification.app.empty() ? state.notification.title
+                                                                     : state.notification.app;
+        const std::wstring bodyText = state.notification.app.empty() ? state.notification.body
+                                                                     : state.notification.title;
+        ComPtr<IDWriteTextLayout> title =
+            DesignType::Layout(heading, Design::Text::IslandNotifyTitle, 1.0f,
+                               std::max(10.0f, textWidth - metaWidth - 8.0f), titleSpec.lineHeight);
+        ComPtr<IDWriteTextLayout> body = DesignType::Layout(bodyText, Design::Text::IslandNotifyBody, 1.0f,
+                                                            textWidth, bodySpec.lineHeight * 2.0f, 2);
+        const float bodyHeight = body ? std::min(DesignType::Height(body.Get()), bodySpec.lineHeight * 2.0f) : 0.0f;
+        const float top = cy - (titleSpec.lineHeight + bodyHeight) * 0.5f;
+
+        if (ID2D1SolidColorBrush* ink = AcquireBrush(WithAlpha(Design::kBarInk, settingsOpacity_))) {
+            if (title) target_->DrawTextLayout(D2D1::Point2F(textLeft, top), title.Get(), ink);
+        }
+        if (ID2D1SolidColorBrush* ink2 = AcquireBrush(WithAlpha(Design::kIslandInk2, Design::kIslandInk2.a * settingsOpacity_))) {
+            if (meta) {
+                target_->DrawTextLayout(D2D1::Point2F(textLeft + textWidth - metaWidth, top), meta.Get(), ink2);
+            }
+            if (body) target_->DrawTextLayout(D2D1::Point2F(textLeft, top + titleSpec.lineHeight), body.Get(), ink2);
+        }
+    }
+
     void DrawPillSurface(D2D1_RECT_F rect, float radius, IslandKind kind, const Settings& settings) {
+        if (BarNotchHeightPx(settings) > 0.0f) {
+            DrawNotchShell(rect, settings);  // flat island-bg; no scrim, depth, bloom or contour
+            return;
+        }
         // The dark tint scrim exists to deepen an opaque background. With a real
         // backdrop enabled it would just mud up the blur, so it is skipped.
         if (tintBrush_ && settings.backdropMaterial == BackdropMaterial::None) {
@@ -18001,10 +18368,14 @@ class Renderer {
             // widest-digit form, so the live string is centred inside a box it is
             // guaranteed to fit rather than drifting as the digits change.
             textBrush_->SetOpacity(0.96f);
-            const D2D1_RECT_F timeRect =
-                D2D1::RectF(slotX, rect.top, slotX + idleMetrics.clockWidth, rect.bottom);
-            target_->DrawTextW(timeBuf, static_cast<UINT32>(wcslen(timeBuf)), idleFmt,
-                               timeRect, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+            if (BarNotchHeight(settings) > 0.0f) {
+                DrawNotchTime(rect, settings);  // island-time, centred in the bar band
+            } else {
+                const D2D1_RECT_F timeRect =
+                    D2D1::RectF(slotX, rect.top, slotX + idleMetrics.clockWidth, rect.bottom);
+                target_->DrawTextW(timeBuf, static_cast<UINT32>(wcslen(timeBuf)), idleFmt,
+                                   timeRect, textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+            }
             slotX += idleMetrics.clockWidth;
 
             if (idleMetrics.hasWeather) {
@@ -18550,8 +18921,9 @@ class Renderer {
         const float notchRestH = BarNotchHeight(settings);
         const bool notchLayout = notchRestH > 0.0f && !CollapsedLyricsActive(state, settings);
         const float collapsedPillH = notchRestH > 0.0f ? notchRestH : kCollapsedPillHeight;
-        const float collapsedArtSize =
-            notchRestH > 0.0f ? std::max(8.0f, collapsedPillH - kCollapsedArtPad * 2.0f) : kCollapsedArtSize;
+        const float collapsedArtSize = notchRestH > 0.0f ? Design::kArtCompact : kCollapsedArtSize;
+        // Bar notch: a rounded square (radius-art-compact), not a circle.
+        const float collapsedArtRadius = notchRestH > 0.0f ? Design::kRadiusArtCompact : collapsedArtSize * 0.5f;
         // Raw progress straight from the island's height.
         const float artMorphRaw = Clamp((height - collapsedPillH) /
                                         (kArtMorphEndHeight - collapsedPillH), 0.0f, 1.0f);
@@ -18618,7 +18990,7 @@ class Renderer {
             lerpF(collapsedArtRect.top, expandedArtRect.top, artMorph),
             lerpF(collapsedArtRect.right, expandedArtRect.right, artMorph),
             lerpF(collapsedArtRect.bottom, expandedArtRect.bottom, artMorph));
-        const float morphArtRadius = lerpF(collapsedArtSize * 0.5f, expandedArtRadius, artMorph);
+        const float morphArtRadius = lerpF(collapsedArtRadius, expandedArtRadius, artMorph);
 
         // Expanded UI
         if (expandedAlpha > 0.01f && mask && layer) {
@@ -18931,7 +19303,9 @@ class Renderer {
 
             D2D1_RECT_F waveRect = D2D1::RectF(rect.right - 42.0f - shiftX, cy - 10.0f,
                                                rect.right - 14.0f - shiftX, cy + 10.0f);
-            if (state.media.playing) {
+            if (notchLayout) {
+                DrawNotchViz(state, rect, settings, now);
+            } else if (state.media.playing) {
                 DrawSpectrum(state, waveRect, settings, now);
             } else {
                 const float gap = 2.5f;
@@ -18961,21 +19335,8 @@ class Renderer {
 
             // Bar notch: the time sits on the notch's centre line, where the
             // resting notch shows it, so it does not move as the notch widens.
-            if (notchLayout && idleTextFormat_) {
-                SYSTEMTIME local = {};
-                GetLocalTime(&local);
-                const std::wstring clockText = FormatIslandTime(local, settings.clockFollowSystem,
-                                                                settings.use24HourClock,
-                                                                settings.showSeconds);
-                const float clockW = MeasureTextWidthCached(WidestDigitForm(clockText),
-                                                            idleTextFormat_.Get(), idleClockWidthCache_);
-                const float mid = (rect.left + rect.right) * 0.5f;
-                textBrush_->SetOpacity(0.96f);
-                target_->DrawTextW(clockText.c_str(), static_cast<UINT32>(clockText.size()),
-                                   idleTextFormat_.Get(),
-                                   D2D1::RectF(mid - clockW * 0.5f, rect.top, mid + clockW * 0.5f, rect.bottom),
-                                   textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
-                textBrush_->SetOpacity(1.0f);
+            if (notchLayout) {
+                DrawNotchTime(rect, settings);
             }
 
             // Clock + divider on the left, same face, size and time format as the
@@ -19046,7 +19407,7 @@ class Renderer {
             // stays a small circle on the collapsed pill and never flies into the
             // expanded layout, so it can't show up on top of the lyrics.
             const D2D1_RECT_F artBaseRect = onMediaTab ? morphArtRect : collapsedArtRect;
-            const float artBaseRadius = onMediaTab ? morphArtRadius : collapsedArtSize * 0.5f;
+            const float artBaseRadius = onMediaTab ? morphArtRadius : collapsedArtRadius;
 
             D2D1_RECT_F artDrawRect = artBaseRect;
             float artDrawRadius = artBaseRadius;
@@ -23626,6 +23987,11 @@ class Renderer {
     double lyricsFxLast_ = -1.0;
     float settingsOpacity_ = 0.96f;
     float barMerge_ = 0.0f;  // 1 while the pill rests merged with the top bar (BarNotchMerge)
+    float notchRadius_ = 0.0f;  // bar notch: animated radiusBottom, stage px
+    float notchEar_ = 0.0f;     // bar notch: animated radiusEar, stage px
+    SpringValue notchViz_[4];   // bar notch: compact visualiser bar heights, content px
+    double notchVizLast_ = -1.0;
+    double notchVizRetargetAt_ = 0.0;
     D2D1_COLOR_F pillBgColor_ = D2D1::ColorF(0.031f, 0.031f, 0.039f, 1.0f);
     // Design tokens for the current frame, rebuilt by EnsureBrushes.
     MaterialTokens material_{};
@@ -26073,6 +26439,10 @@ DWORD WINAPI RenderThreadProc(void*) {
     SpringValue heightSpring;
     SpringValue nudgeSpring;
     SpringValue volumeBarSpring;
+    SpringValue notchRadiusSpring;  // bar notch: radiusBottom, content px
+    SpringValue notchEarSpring;     // bar notch: radiusEar, content px
+    notchRadiusSpring.Reset(Design::kIdle.radiusBottom);
+    notchEarSpring.Reset(Design::kIdle.radiusEar);
     widthSpring.Reset((g_settings.autoHideIdleSeconds == -1 ? 0.0f : 120.0f) * g_settings.sizeScale);
     heightSpring.Reset((g_settings.autoHideIdleSeconds == -1 ? 0.0f : 36.0f) * g_settings.sizeScale);
     nudgeSpring.Reset(0.0f);
@@ -26559,13 +26929,9 @@ DWORD WINAPI RenderThreadProc(void*) {
                 const float clockSection = g_settings.mediaPillClock
                     ? renderer.MeasureMediaPill(snapshot, g_settings).sectionWidth
                     : 0.0f;
-                const float notchMediaWidth = renderer.MeasureNotchMediaWidth(snapshot, g_settings);
                 if (CollapsedLyricsActive(snapshot, g_settings)) {
                     // Collapsed but carrying lyrics: wider pill, same height.
                     primary.width = (kCollapsedLyricsWidth + clockSection) * g_settings.sizeScale;
-                } else if (notchMediaWidth > 0.0f) {
-                    // Bar notch: widens out of the time-only notch to [cover | time | visualiser].
-                    primary.width = notchMediaWidth * g_settings.sizeScale;
                 } else if (g_settings.mediaPillClock) {
                     primary.width = (MediaPillLayout::kBaseWidth + clockSection) * g_settings.sizeScale;
                 }
@@ -26586,20 +26952,42 @@ DWORD WINAPI RenderThreadProc(void*) {
             }
         }
 
-        // Bar notch: every collapsed pill (resting time, media, alerts) is exactly
-        // as tall as the bar, so nothing collapsed ever hangs below it. Expanded
-        // views, the Quick Lookup / song recognition cards and the game overlay
-        // strip keep their own heights.
+        // Bar notch (design/components.md "Вырез"): the island is in one of four
+        // states -- idle 185x32, music 300x32, notification 380x104 (every alert),
+        // player 520x190 (hover / pinned) -- with H measured from the top of the
+        // screen, below-bar heights following the bar's real height. Quick Lookup,
+        // song recognition and the game overlay keep their own sizes, the media pill
+        // with collapsed lyrics keeps its width, and side lyrics may widen the
+        // player. One island at a time, so no split layout.
+        float notchRadiusTarget = Design::kIdle.radiusBottom;
+        float notchEarTarget = Design::kIdle.radiusEar;
+        bool notchDrop = false;
         if (const float barNotchPx = BarNotchHeightPx(g_settings); barNotchPx > 0.0f) {
-            const float expandedPx = MediaLayout::kExpandedHeight * g_settings.sizeScale - 0.5f;
-            auto fitToBar = [&](Activity& a) {
-                if (a.width <= 0.0f || a.height <= 0.0f || a.height >= expandedPx) return;
-                if (a.kind == IslandKind::Lookup || a.kind == IslandKind::SongId) return;
-                if (a.kind == IslandKind::Idle && gameMetricsPresent) return;
-                a.height = barNotchPx;
-            };
-            fitToBar(primary);
-            if (secondary) fitToBar(*secondary);
+            const float k = g_settings.sizeScale;
+            secondary.reset();
+            Activity& a = primary;
+            const bool own = a.kind == IslandKind::Lookup || a.kind == IslandKind::SongId ||
+                             (a.kind == IslandKind::Idle && gameMetricsPresent);
+            if (a.width > 0.0f && a.height > 0.0f && !own) {
+                const bool expanded = a.height >= MediaLayout::kExpandedHeight * k - 0.5f;
+                const Design::IslandState& st = expanded ? Design::kPlayer
+                                                : a.kind == IslandKind::Idle  ? Design::kIdle
+                                                : a.kind == IslandKind::Media ? Design::kMusic
+                                                                              : Design::kNotify;
+                const float h = barNotchPx + (st.h - Design::kBarHeight) * k;
+                if (expanded) {
+                    a.width = std::max(a.width, st.w * k);
+                    a.height = std::max(a.height, h);
+                } else {
+                    if (!(a.kind == IslandKind::Media && CollapsedLyricsActive(snapshot, g_settings))) {
+                        a.width = st.w * k;
+                    }
+                    a.height = h;
+                }
+                notchRadiusTarget = st.radiusBottom;
+                notchEarTarget = st.radiusEar;
+                notchDrop = &st == &Design::kNotify;
+            }
         }
 
         if (stripActive && primary.width > 0.0f) {
@@ -26635,6 +27023,8 @@ DWORD WINAPI RenderThreadProc(void*) {
         if (justUnhidden || (unhideGraceActive && widthSpring.value < 0.5f && targetWidth > 1.0f)) {
             widthSpring.Reset(targetWidth);
             heightSpring.Reset(targetHeight);
+            notchRadiusSpring.Reset(notchRadiusTarget);
+            notchEarSpring.Reset(notchEarTarget);
             nudgeSpring.Reset(0.0f);
         }
 
@@ -26677,6 +27067,30 @@ DWORD WINAPI RenderThreadProc(void*) {
             heightDamping = 28.0f * styleDampingMult;
         }
 
+        // Bar notch: motion.md springs -- island.expand to grow, island.collapse to
+        // shrink, island.drop for the notification's height. The animation style
+        // multipliers do not apply; radiusBottom / radiusEar ride the height's spring.
+        const bool barNotchMode = BarNotchHeightPx(g_settings) > 0.0f;
+        if (barNotchMode) {
+            const Design::SpringParams& w =
+                targetWidth >= widthSpring.value ? Design::kIslandExpand : Design::kIslandCollapse;
+            widthStiffness = w.stiffness;
+            widthDamping = w.damping;
+            const bool heightGrows = targetHeight >= heightSpring.value;
+            const Design::SpringParams& hs = heightGrows
+                ? (notchDrop ? Design::kIslandDrop : Design::kIslandExpand)
+                : Design::kIslandCollapse;
+            heightStiffness = hs.stiffness;
+            heightDamping = hs.damping;
+            const Design::SpringParams& rs = heightGrows ? Design::kIslandExpand : Design::kIslandCollapse;
+            notchRadiusSpring.target = notchRadiusTarget;
+            notchEarSpring.target = notchEarTarget;
+            notchRadiusSpring.Step(dt * speed, rs.stiffness, rs.damping);
+            notchEarSpring.Step(dt * speed, rs.stiffness, rs.damping);
+            renderer.SetNotchShape(std::max(0.0f, notchRadiusSpring.value) * g_settings.sizeScale,
+                                   std::max(0.0f, notchEarSpring.value) * g_settings.sizeScale);
+        }
+
         widthSpring.Step(dt * speed, widthStiffness, widthDamping);
         if (widthSpring.value < 0.0f) {
             widthSpring.value = 0.0f;
@@ -26691,8 +27105,8 @@ DWORD WINAPI RenderThreadProc(void*) {
 
         nudgeSpring.Step(dt * speed, 280.0f * styleStiffnessMult, 24.0f * styleDampingMult);
 
-        // Top bar: side content slides away from a notch that grows into it.
-        TopBar::Tick(dt * speed, styleStiffnessMult, styleDampingMult, pillRect,
+        // Top bar: items next to the island hide while it is wide enough to reach them.
+        TopBar::Tick(dt * speed, pillRect,
                      widthSpring.value > 1.0f && heightSpring.value > 1.0f && IsWindowVisible(hwnd));
 
         // Tracks the live level while the flyout is closed, so opening it doesn't sweep from a stale value.
@@ -26982,11 +27396,9 @@ DWORD WINAPI RenderThreadProc(void*) {
                 const bool isExpanded = isHoverExpanded || pinned || isTransientAlert || (widthSpring.value > 260.0f);
                 renderSettings.pillOpacity = isExpanded ? 0.98f : 0.88f;
             }
-            if (!ctrlHoverCT) {
-                // Bar notch: fully opaque while merged with the bar (the window's
-                // alpha would otherwise let the desktop through the notch only).
-                const float merge = BarNotchMerge(renderSettings, heightSpring.value);
-                renderSettings.pillOpacity += (1.0f - renderSettings.pillOpacity) * merge;
+            if (!ctrlHoverCT && BarNotchHeightPx(renderSettings) > 0.0f) {
+                // Bar notch: island-bg is opaque black, like the bar it comes out of.
+                renderSettings.pillOpacity = 1.0f;
             }
             // No usable backdrop (old Windows / effects off): keep the solid background.
             if (renderSettings.backdropMaterial != BackdropMaterial::None &&
