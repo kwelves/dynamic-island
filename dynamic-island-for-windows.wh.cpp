@@ -682,6 +682,7 @@ We love community contributions! To ensure high-quality updates, please follow t
 #include <string_view>
 #include <thread>
 #include <unordered_map>
+#include <tlhelp32.h>
 #include <utility>
 #include <vector>
 #include <set>
@@ -2250,6 +2251,16 @@ const wchar_t* Loc(const wchar_t* english) {
     // Order: en, fr, es, de, pt, it, ru, tr, hi, zh, ja, ko
     static const Row kRows[] = {
         {L"Media", {nullptr, L"Média", L"Multimedia", L"Medien", L"Mídia", L"Media", L"Медиа", L"Medya", L"मीडिया", L"媒体", L"メディア", L"미디어"}},
+        {L"Known Network", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Известная сеть", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Other Networks", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Другие сети", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Wi-Fi Settings\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Настройки Wi\u2011Fi\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"No Wi-Fi adapter", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Нет адаптера Wi\u2011Fi", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Battery", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Батарея", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Power Source: Battery", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Источник питания: аккумулятор", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Power Source: Power Adapter", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Источник питания: сеть", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Using Significant Energy", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Значительное энергопотребление", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"No Apps Using Significant Energy", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Нет приложений со значительным энергопотреблением", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Battery Settings\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Настройки батареи\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"Sound", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Звук", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"Output", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Выход", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"Sound Settings\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Настройки звука\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
@@ -4458,6 +4469,7 @@ constexpr wchar_t kGlyphBatteryCharging[11] = {0xE85A, 0xE85B, 0xE85C, 0xE85D, 0
 constexpr wchar_t kGlyphBrightness = 0xE706;  // weather: clear
 constexpr wchar_t kGlyphCloud = 0xE753;       // weather: cloudy
 constexpr wchar_t kGlyphSettings = 0xE713;
+constexpr wchar_t kGlyphLock = 0xE72E;
 constexpr wchar_t kGlyphCheckmark = 0xE73E;
 constexpr wchar_t kGlyphChevronRight = 0xE76C;
 constexpr wchar_t kGlyphSpeakers = 0xE7F5;
@@ -5140,6 +5152,8 @@ void ReleaseTargetResources();
 // while the bar's Sound panel changes the volume (macOS shows no HUD then).
 std::atomic<uint64_t> g_volumeFlyoutQuietUntil{0};
 
+bool IconToPixels(HICON icon, UINT size, BitmapPixels* outPixels);  // defined further down
+
 // Click-to-open panels under the bar (defined after TopBar).
 namespace Panels {
 constexpr UINT kCloseMessage = WM_APP + 0x44C;  // input hooks: Esc / a click elsewhere
@@ -5717,7 +5731,7 @@ void EmergencyRemove() {
 
 // ── Bar panels ───────────────────────────────────────────────────────────────
 // Click-to-open panels under the bar items, macOS Control Center style:
-// Sound (volume item), Bluetooth and the calendar (date item).
+// Bluetooth, Wi-Fi, Sound (volume item), Battery and the calendar (date item).
 //
 // Layout: design/components.md "Модульная панель Control Center" (300 wide,
 // radius 16, padding 10; header 38, section 26, row 34, slider 22 + 2/8,
@@ -5735,7 +5749,8 @@ void EmergencyRemove() {
 // bar. Its material is panel-bg-solid: the design's fallback for the blurred
 // panel-bg. While a panel is open, low-level mouse and keyboard hooks (own
 // thread) watch for Esc, arrows and clicks elsewhere; they are removed again
-// when it closes. Bluetooth calls (WinRT, blocking) run on a worker thread.
+// when it closes. Radio, Bluetooth, Wi-Fi and energy queries (blocking) run on
+// a worker thread.
 // Everything else runs on the render thread, which owns the bar.
 namespace Panels {
 
@@ -5886,17 +5901,52 @@ struct BtDevice {
     wchar_t glyph = Design::kGlyphBluetooth;
 };
 
-std::mutex g_dataMutex;  // leaf lock: g_btDevices, g_btLoaded
+// Wi-Fi networks in range, merged by SSID; level 1..4 like the bar icon.
+struct WifiNetwork {
+    std::wstring ssid;
+    std::wstring profile;  // a saved profile: connecting needs no password
+    int level = 1;
+    bool secured = false;
+    bool connected = false;
+};
+
+// An app using significant energy: high CPU over a 1.5 s sample (Windows has no
+// per-app energy API for desktop apps, CPU is what drives it).
+struct EnergyApp {
+    std::wstring name;
+    PixelsRef icon;
+    float cpu = 0.0f;  // share of all cores, 0..1
+};
+
+std::mutex g_dataMutex;  // leaf lock for everything the worker publishes below
 std::vector<BtDevice> g_btDevices;
 bool g_btLoaded = false;
+std::vector<WifiNetwork> g_wifiNetworks;
+bool g_wifiLoaded = false;
+bool g_wifiAdapter = true;  // false: this PC has no Wi-Fi interface
+int g_wifiRadio = -1;       // -1 unknown, 0 off, 1 on
+std::wstring g_connectProfile;
+std::vector<EnergyApp> g_energyApps;
+bool g_energyLoaded = false;
+
 std::atomic<bool> g_wantDevices{false};
-std::atomic<int> g_wantRadio{-1};   // -1 nothing, 0 off, 1 on
-std::atomic<int> g_radioResult{0};  // set by the worker: 1 done, -1 refused
+std::atomic<int> g_wantRadio{-1};       // Bluetooth: -1 nothing, 0 off, 1 on
+std::atomic<int> g_radioResult{0};      // Bluetooth: 1 done, -1 refused
+std::atomic<bool> g_wantWifi{false};
+std::atomic<int> g_wantWifiRadio{-1};   // Wi-Fi: -1 nothing, 0 off, 1 on
+std::atomic<int> g_wifiRadioResult{0};  // Wi-Fi: 1 done, -1 refused
+std::atomic<bool> g_wantConnect{false};
+std::atomic<int> g_connectResult{0};    // 1 started, -1 failed
+std::atomic<bool> g_wantEnergy{false};
 HANDLE g_jobEvent = nullptr;
 HANDLE g_workerThread = nullptr;
 
 void PostData() {
     if (HWND bar = BarStatus::g_notifyHwnd.load()) PostMessageW(bar, kDataMessage, 0, 0);
+}
+
+void Wake() {
+    if (g_jobEvent) SetEvent(g_jobEvent);
 }
 
 #if DYNAMIC_ISLAND_HAS_BLUETOOTH_WATCHER
@@ -5939,35 +5989,292 @@ std::vector<BtDevice> EnumeratePaired() {
 }
 #endif
 
-bool SetRadio(bool on) {
+using winrt::Windows::Devices::Radios::RadioKind;
+
+bool SetRadio(RadioKind kind, bool on) {
     using namespace winrt::Windows::Devices::Radios;
     if (Radio::RequestAccessAsync().get() != RadioAccessStatus::Allowed) return false;
     for (const Radio& radio : Radio::GetRadiosAsync().get()) {
-        if (radio.Kind() == RadioKind::Bluetooth) {
+        if (radio.Kind() == kind) {
             return radio.SetStateAsync(on ? RadioState::On : RadioState::Off).get() == RadioAccessStatus::Allowed;
         }
     }
     return false;
 }
 
+int RadioOn(RadioKind kind) {  // -1 no such radio, 0 off, 1 on
+    using winrt::Windows::Devices::Radios::Radio;
+    for (const Radio& radio : Radio::GetRadiosAsync().get()) {
+        if (radio.Kind() == kind) return radio.State() == winrt::Windows::Devices::Radios::RadioState::On ? 1 : 0;
+    }
+    return -1;
+}
+
+// ── Wi-Fi (WlanApi) ──────────────────────────────────────────────────────────
+HANDLE g_wlan = nullptr;
+
+bool WlanReady() {
+    if (g_wlan) return true;
+    DWORD version = 0;
+    if (WlanOpenHandle(2, nullptr, &version, &g_wlan) != ERROR_SUCCESS) g_wlan = nullptr;
+    return g_wlan != nullptr;
+}
+
+bool FirstWifiInterface(GUID* out) {
+    if (!WlanReady()) return false;
+    WLAN_INTERFACE_INFO_LIST* list = nullptr;
+    bool found = false;
+    if (WlanEnumInterfaces(g_wlan, nullptr, &list) == ERROR_SUCCESS && list) {
+        if (list->dwNumberOfItems > 0) {
+            *out = list->InterfaceInfo[0].InterfaceGuid;
+            found = true;
+        }
+        WlanFreeMemory(list);
+    }
+    return found;
+}
+
+std::vector<WifiNetwork> ListNetworks(const GUID& iface) {
+    std::vector<WifiNetwork> out;
+    WLAN_AVAILABLE_NETWORK_LIST* list = nullptr;
+    if (WlanGetAvailableNetworkList(g_wlan, &iface, 0, nullptr, &list) != ERROR_SUCCESS || !list) return out;
+    for (DWORD i = 0; i < list->dwNumberOfItems; ++i) {
+        const WLAN_AVAILABLE_NETWORK& n = list->Network[i];
+        if (n.dot11Ssid.uSSIDLength == 0) continue;  // hidden network
+        const int len = MultiByteToWideChar(CP_UTF8, 0, reinterpret_cast<const char*>(n.dot11Ssid.ucSSID),
+                                            static_cast<int>(n.dot11Ssid.uSSIDLength), nullptr, 0);
+        WifiNetwork w;
+        w.ssid.resize(std::max(0, len));
+        MultiByteToWideChar(CP_UTF8, 0, reinterpret_cast<const char*>(n.dot11Ssid.ucSSID),
+                            static_cast<int>(n.dot11Ssid.uSSIDLength), w.ssid.data(), len);
+        const int q = static_cast<int>(n.wlanSignalQuality);
+        w.level = q >= 75 ? 4 : q >= 50 ? 3 : q >= 25 ? 2 : 1;
+        w.secured = n.bSecurityEnabled != FALSE;
+        w.connected = (n.dwFlags & WLAN_AVAILABLE_NETWORK_CONNECTED) != 0;
+        if (n.dwFlags & WLAN_AVAILABLE_NETWORK_HAS_PROFILE) w.profile = n.strProfileName;
+        auto same = std::find_if(out.begin(), out.end(), [&](const WifiNetwork& o) { return o.ssid == w.ssid; });
+        if (same == out.end()) {
+            out.push_back(std::move(w));
+        } else {
+            same->level = std::max(same->level, w.level);
+            same->connected = same->connected || w.connected;
+            if (same->profile.empty()) same->profile = w.profile;
+        }
+    }
+    WlanFreeMemory(list);
+    std::stable_sort(out.begin(), out.end(), [](const WifiNetwork& a, const WifiNetwork& b) {
+        if (a.connected != b.connected) return a.connected;
+        return a.level > b.level;
+    });
+    if (out.size() > 10) out.resize(10);
+    return out;
+}
+
+// ── Energy sample ────────────────────────────────────────────────────────────
+struct ProcTimes {
+    std::wstring path;
+    ULONGLONG cpu = 0;  // kernel + user, 100 ns
+};
+
+std::unordered_map<DWORD, ProcTimes> SampleProcesses() {
+    std::unordered_map<DWORD, ProcTimes> out;
+    DWORD session = 0;
+    ProcessIdToSessionId(GetCurrentProcessId(), &session);
+    HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (snap == INVALID_HANDLE_VALUE) return out;
+    PROCESSENTRY32W pe = {sizeof(pe)};
+    for (BOOL ok = Process32FirstW(snap, &pe); ok; ok = Process32NextW(snap, &pe)) {
+        DWORD procSession = 0;
+        if (pe.th32ProcessID == 0 || pe.th32ProcessID == GetCurrentProcessId() ||
+            !ProcessIdToSessionId(pe.th32ProcessID, &procSession) || procSession != session) {
+            continue;
+        }
+        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pe.th32ProcessID);
+        if (!h) continue;
+        FILETIME c, e, k, u;
+        wchar_t path[MAX_PATH] = {};
+        DWORD size = MAX_PATH;
+        if (GetProcessTimes(h, &c, &e, &k, &u) && QueryFullProcessImageNameW(h, 0, path, &size)) {
+            ProcTimes t;
+            t.path = path;
+            t.cpu = (static_cast<ULONGLONG>(k.dwHighDateTime) << 32 | k.dwLowDateTime) +
+                    (static_cast<ULONGLONG>(u.dwHighDateTime) << 32 | u.dwLowDateTime);
+            out.emplace(pe.th32ProcessID, std::move(t));
+        }
+        CloseHandle(h);
+    }
+    CloseHandle(snap);
+    return out;
+}
+
+BOOL CALLBACK CollectWindowPids(HWND hwnd, LPARAM lParam) {
+    if (IsWindowVisible(hwnd) && !GetWindow(hwnd, GW_OWNER) &&
+        !(GetWindowLongPtrW(hwnd, GWL_EXSTYLE) & WS_EX_TOOLWINDOW) && GetWindowTextLengthW(hwnd) > 0) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        reinterpret_cast<std::set<DWORD>*>(lParam)->insert(pid);
+    }
+    return TRUE;
+}
+
+// Apps (anything with a visible window) whose processes together used at least
+// 2.5 % of all cores over the sample, highest first, at most five.
+std::vector<EnergyApp> SignificantEnergy(const std::unordered_map<DWORD, ProcTimes>& before,
+                                         const std::unordered_map<DWORD, ProcTimes>& after, double seconds) {
+    std::set<DWORD> windowed;
+    EnumWindows(CollectWindowPids, reinterpret_cast<LPARAM>(&windowed));
+    struct Group {
+        ULONGLONG cpu = 0;
+        bool windowed = false;
+    };
+    std::unordered_map<std::wstring, Group> groups;  // by lower-case exe path
+    for (const auto& [pid, now] : after) {
+        auto it = before.find(pid);
+        if (it == before.end() || it->second.path != now.path || now.cpu < it->second.cpu) continue;
+        std::wstring key = now.path;
+        CharLowerBuffW(key.data(), static_cast<DWORD>(key.size()));
+        Group& group = groups[key];
+        group.cpu += now.cpu - it->second.cpu;
+        group.windowed = group.windowed || windowed.count(pid) != 0;
+    }
+    SYSTEM_INFO si = {};
+    GetSystemInfo(&si);
+    const double capacity = seconds * 1e7 * std::max<DWORD>(1, si.dwNumberOfProcessors);
+    std::vector<std::pair<float, std::wstring>> ranked;
+    for (const auto& [path, group] : groups) {
+        const float share = static_cast<float>(group.cpu / capacity);
+        if (group.windowed && share >= 0.025f) ranked.emplace_back(share, path);
+    }
+    std::sort(ranked.begin(), ranked.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+    std::vector<EnergyApp> out;
+    for (const auto& [share, path] : ranked) {
+        if (out.size() >= 5) break;
+        EnergyApp app;
+        app.cpu = share;
+        app.name = BarStatus::FileDescription(path);
+        if (app.name.empty()) {
+            app.name = path.substr(path.find_last_of(L"\\/") + 1);
+            const size_t dot = app.name.find_last_of(L'.');
+            if (dot != std::wstring::npos) app.name.resize(dot);
+            if (!app.name.empty()) app.name[0] = static_cast<wchar_t>(towupper(app.name[0]));
+        }
+        HICON icon = nullptr;
+        if (ExtractIconExW(path.c_str(), 0, &icon, nullptr, 1) > 0 && icon) {
+            BitmapPixels px;
+            if (IconToPixels(icon, 32, &px)) app.icon = PixelsRef(std::move(px));
+            DestroyIcon(icon);
+        }
+        out.push_back(std::move(app));
+    }
+    return out;
+}
+
 DWORD WINAPI WorkerProc(void*) {
     winrt::init_apartment(winrt::apartment_type::multi_threaded);
     HANDLE waits[2] = {g_stopEvent, g_jobEvent};
-    while (WaitForMultipleObjects(2, waits, FALSE, INFINITE) == WAIT_OBJECT_0 + 1) {
-        const int radio = g_wantRadio.exchange(-1);
-        if (radio >= 0) {
+    ULONGLONG rescanAt = 0;  // Wi-Fi: read the list again once a scan had time to finish
+    ULONGLONG energyAt = 0;  // energy: second sample
+    std::unordered_map<DWORD, ProcTimes> energyBefore;
+    ULONGLONG energyStart = 0;
+    for (;;) {
+        DWORD timeout = INFINITE;
+        const ULONGLONG now = GetTickCount64();
+        for (ULONGLONG at : {rescanAt, energyAt}) {
+            if (at) timeout = std::min<DWORD>(timeout, at > now ? static_cast<DWORD>(at - now) : 0);
+        }
+        const DWORD wait = WaitForMultipleObjects(2, waits, FALSE, timeout);
+        if (wait == WAIT_OBJECT_0 || wait == WAIT_FAILED) break;
+
+        for (const bool wifi : {false, true}) {
+            const int radio = (wifi ? g_wantWifiRadio : g_wantRadio).exchange(-1);
+            if (radio < 0) continue;
             bool ok = false;
             try {
-                ok = SetRadio(radio == 1);
+                ok = SetRadio(wifi ? RadioKind::WiFi : RadioKind::Bluetooth, radio == 1);
             } catch (const winrt::hresult_error& e) {
-                Wh_Log(L"Bluetooth panel: switching the radio failed (0x%08X).", static_cast<unsigned>(e.code()));
+                Wh_Log(L"Panels: switching the %s radio failed (0x%08X).", wifi ? L"Wi-Fi" : L"Bluetooth",
+                       static_cast<unsigned>(e.code()));
             } catch (...) {
             }
-            if (!ok) Wh_Log(L"Bluetooth panel: Windows refused to switch the radio; opening Bluetooth settings.");
-            g_radioResult = ok ? 1 : -1;
-            g_wantDevices = true;
+            if (!ok) Wh_Log(L"Panels: Windows refused to switch the %s radio; opening its settings.", wifi ? L"Wi-Fi" : L"Bluetooth");
+            (wifi ? g_wifiRadioResult : g_radioResult) = ok ? 1 : -1;
+            if (wifi) {
+                g_wantWifi = true;
+                rescanAt = GetTickCount64() + 3500;  // networks reappear a few seconds after the radio
+            } else {
+                g_wantDevices = true;
+            }
             PostData();
         }
+
+        if (g_wantConnect.exchange(false)) {
+            std::wstring profile;
+            {
+                std::lock_guard lock(g_dataMutex);
+                profile = g_connectProfile;
+            }
+            GUID iface = {};
+            bool ok = false;
+            if (!profile.empty() && FirstWifiInterface(&iface)) {
+                WLAN_CONNECTION_PARAMETERS params = {};
+                params.wlanConnectionMode = wlan_connection_mode_profile;
+                params.strProfile = profile.c_str();
+                params.dot11BssType = dot11_BSS_type_any;
+                ok = WlanConnect(g_wlan, &iface, &params, nullptr) == ERROR_SUCCESS;
+            }
+            if (!ok) Wh_Log(L"Wi-Fi panel: connecting to the saved network failed.");
+            g_connectResult = ok ? 1 : -1;
+            rescanAt = GetTickCount64() + 3000;
+            PostData();
+        }
+
+        const bool rescanDue = rescanAt && GetTickCount64() >= rescanAt;
+        if (g_wantWifi.exchange(false) || rescanDue) {
+            GUID iface = {};
+            const bool adapter = FirstWifiInterface(&iface);
+            std::vector<WifiNetwork> list;
+            if (adapter) {
+                list = ListNetworks(iface);
+                if (!rescanDue) {
+                    WlanScan(g_wlan, &iface, nullptr, nullptr, nullptr);  // results land in a few seconds
+                    rescanAt = GetTickCount64() + 3500;
+                } else {
+                    rescanAt = 0;
+                }
+            }
+            int radio = -1;
+            try {
+                radio = RadioOn(RadioKind::WiFi);
+            } catch (...) {
+            }
+            {
+                std::lock_guard lock(g_dataMutex);
+                g_wifiAdapter = adapter;
+                g_wifiNetworks = std::move(list);
+                g_wifiLoaded = true;
+                g_wifiRadio = radio;
+            }
+            PostData();
+        }
+
+        if (g_wantEnergy.exchange(false)) {
+            energyBefore = SampleProcesses();
+            energyStart = GetTickCount64();
+            energyAt = energyStart + 1500;
+        } else if (energyAt && GetTickCount64() >= energyAt) {
+            energyAt = 0;
+            const auto after = SampleProcesses();
+            std::vector<EnergyApp> apps =
+                SignificantEnergy(energyBefore, after, (GetTickCount64() - energyStart) / 1000.0);
+            energyBefore.clear();
+            {
+                std::lock_guard lock(g_dataMutex);
+                g_energyApps = std::move(apps);
+                g_energyLoaded = true;
+            }
+            PostData();
+        }
+
         if (g_wantDevices.exchange(false)) {
 #if DYNAMIC_ISLAND_HAS_BLUETOOTH_WATCHER
             try {
@@ -5980,11 +6287,17 @@ DWORD WINAPI WorkerProc(void*) {
             } catch (...) {
             }
 #else
-            std::lock_guard lock(g_dataMutex);
-            g_btLoaded = true;
+            {
+                std::lock_guard lock(g_dataMutex);
+                g_btLoaded = true;
+            }
 #endif
             PostData();
         }
+    }
+    if (g_wlan) {
+        WlanCloseHandle(g_wlan, nullptr);
+        g_wlan = nullptr;
     }
     winrt::uninit_apartment();
     return 0;
@@ -6094,14 +6407,22 @@ void StopThreads() {
 
 // ── Panel model ──────────────────────────────────────────────────────────────
 enum class RowKind { Header, Slider, Section, Caption, Item, Sep, Link, CalHeader, CalWeekdays, CalWeek };
-enum Action { kNoAction, kSetOutput, kOpenSoundSettings, kOpenBluetoothSettings, kOpenDateSettings };
+enum Action {
+    kNoAction, kSetOutput, kOpenSoundSettings, kOpenBluetoothSettings, kOpenDateSettings,
+    kConnectWifi, kOpenWifiSettings, kOpenBatterySettings
+};
 
 struct Row {
     RowKind kind = RowKind::Sep;
     std::wstring title;
     std::wstring caption;
     std::wstring arg;
+    std::wstring value;   // header: a value on the right ("87 %")
     wchar_t glyph = 0;
+    int wifiLevel = 0;    // item: draw the Wi-Fi ghost + this level (1..4) instead of `glyph`
+    PixelsRef icon;       // item: an app icon instead of the circle
+    bool lock = false;    // item: trailing lock (secured network)
+    bool plain = false;   // item: information only, no hover / press / action
     bool on = false;
     bool check = false;   // output rows: a trailing check while on, the circle stays fill-off
     bool toggle = false;  // header with a switch
@@ -6175,7 +6496,8 @@ struct State {
 State g;
 
 bool HasPanel(int item) {
-    return item == BarContent::kVolume || item == BarContent::kBluetooth || item == BarContent::kDate;
+    return item == BarContent::kVolume || item == BarContent::kBluetooth || item == BarContent::kDate ||
+           item == BarContent::kNetwork || item == BarContent::kBattery;
 }
 
 int OpenItem() {
@@ -6232,6 +6554,9 @@ std::wstring WeekdayInitial(int weekday) {  // 0 = Sunday
 }
 
 // ── Rows ─────────────────────────────────────────────────────────────────────
+// App icons as D2D bitmaps, per render target; dropped with the rows.
+std::vector<std::pair<const BitmapPixels*, ComPtr<ID2D1Bitmap>>> g_iconBitmaps;
+
 Row MakeRow(RowKind kind, std::wstring title = L"", int action = kNoAction) {
     Row r;
     r.kind = kind;
@@ -6278,6 +6603,76 @@ void BuildRows() {
         if (loaded && devices.empty()) g.rows.push_back(MakeRow(RowKind::Caption, Loc(L"No devices")));
         g.rows.push_back(MakeRow(RowKind::Sep));
         g.rows.push_back(MakeRow(RowKind::Link, Loc(L"Bluetooth Settings…"), kOpenBluetoothSettings));
+    } else if (g.item == BarContent::kNetwork) {
+        // prototype "wifi": header + switch, "Известная сеть" (the connected one),
+        // "Другие сети", separator, "Настройки Wi-Fi…".
+        bool adapter = true;
+        std::vector<WifiNetwork> networks;
+        {
+            std::lock_guard lock(g_dataMutex);
+            adapter = g_wifiAdapter;
+            networks = g_wifiNetworks;
+        }
+        Row header = MakeRow(RowKind::Header, L"Wi\u2011Fi");
+        header.toggle = adapter;
+        g.rows.push_back(std::move(header));
+        if (!adapter) {
+            g.rows.push_back(MakeRow(RowKind::Caption, Loc(L"No Wi-Fi adapter")));
+        } else if (g.switchOn) {
+            auto addNetwork = [&](const WifiNetwork& n) {
+                Row r = MakeRow(RowKind::Item, n.ssid, kConnectWifi);
+                r.wifiLevel = n.level;
+                r.lock = n.secured;
+                r.on = n.connected;
+                r.arg = n.profile;
+                g.rows.push_back(std::move(r));
+            };
+            bool anyOther = false;
+            for (const WifiNetwork& n : networks) {
+                if (n.connected) {
+                    g.rows.push_back(MakeRow(RowKind::Section, Loc(L"Known Network")));
+                    addNetwork(n);
+                } else {
+                    anyOther = true;
+                }
+            }
+            if (anyOther) {
+                g.rows.push_back(MakeRow(RowKind::Section, Loc(L"Other Networks")));
+                for (const WifiNetwork& n : networks) {
+                    if (!n.connected) addNetwork(n);
+                }
+            }
+        }
+        g.rows.push_back(MakeRow(RowKind::Sep));
+        g.rows.push_back(MakeRow(RowKind::Link, Loc(L"Wi-Fi Settings\u2026"), kOpenWifiSettings));
+    } else if (g.item == BarContent::kBattery) {
+        // prototype "battery": header with the percentage, the power source,
+        // separator, "Значительное энергопотребление", separator, "Настройки батареи…".
+        const BarStatus::Model model = BarStatus::Get();
+        Row header = MakeRow(RowKind::Header, Loc(L"Battery"));
+        header.value = std::to_wstring(model.battery) + L" %";
+        g.rows.push_back(std::move(header));
+        g.rows.push_back(MakeRow(RowKind::Caption,
+                                 Loc(model.charging ? L"Power Source: Power Adapter" : L"Power Source: Battery")));
+        g.rows.push_back(MakeRow(RowKind::Sep));
+        g.rows.push_back(MakeRow(RowKind::Section, Loc(L"Using Significant Energy")));
+        bool loaded = false;
+        std::vector<EnergyApp> apps;
+        {
+            std::lock_guard lock(g_dataMutex);
+            loaded = g_energyLoaded;
+            apps = g_energyApps;
+        }
+        for (const EnergyApp& app : apps) {
+            Row r = MakeRow(RowKind::Item, app.name);
+            r.plain = true;
+            r.icon = app.icon;
+            r.glyph = Design::kGlyphSettings;
+            g.rows.push_back(std::move(r));
+        }
+        if (loaded && apps.empty()) g.rows.push_back(MakeRow(RowKind::Caption, Loc(L"No Apps Using Significant Energy")));
+        g.rows.push_back(MakeRow(RowKind::Sep));
+        g.rows.push_back(MakeRow(RowKind::Link, Loc(L"Battery Settings\u2026"), kOpenBatterySettings));
     } else if (g.item == BarContent::kDate) {
         g.rows.push_back(MakeRow(RowKind::CalHeader, MonthTitle()));
         g.rows.push_back(MakeRow(RowKind::CalWeekdays));
@@ -6298,6 +6693,7 @@ void BuildRows() {
     }
     g.height = y + Design::kPanelPadY;
     g.hover = g.press = -1;
+    g_iconBitmaps.clear();
 }
 
 // ── Window and drawing ───────────────────────────────────────────────────────
@@ -6334,6 +6730,7 @@ bool EnsureWindow() {
 }
 
 void ReleaseSurface() {
+    g_iconBitmaps.clear();
     g_brush.Reset();
     g_rt.Reset();
     if (g_dc) {
@@ -6483,6 +6880,10 @@ void DrawRow(int index, const D2D1_MATRIX_3X2_F& base) {
     switch (r.kind) {
         case RowKind::Header: {
             DrawLabel(r.title, Text::PanelTitle, cx, r.y, W - cx * 2.0f, r.h, Design::kInk1, 1.0f);
+            if (!r.value.empty()) {  // .mb-header-value: panel-row, ink-2, tnum, right
+                DrawLabel(r.value, Text::PanelRow, cx, r.y, W - cx * 2.0f, r.h, Design::kInk2, 1.0f,
+                          DWRITE_TEXT_ALIGNMENT_TRAILING, true);
+            }
             if (r.toggle) {
                 const D2D1_RECT_F sw = SwitchRect(r);
                 if (ID2D1SolidColorBrush* b = Brush(Mix(Design::kSwitchOff, Design::kAccent, g.trackT))) {
@@ -6533,17 +6934,47 @@ void DrawRow(int index, const D2D1_MATRIX_3X2_F& base) {
             break;
         }
         case RowKind::Item: {
-            plate(Design::kRadiusPanelRow);
+            if (!r.plain) plate(Design::kRadiusPanelRow);
             const float rad = Design::kRowCircle * 0.5f;
             const D2D1_POINT_2F c = D2D1::Point2F(cx + rad, r.y + r.h * 0.5f);
+            const D2D1_RECT_F circle = D2D1::RectF(c.x - rad, c.y - rad, c.x + rad, c.y + rad);
             const bool accent = r.on && !r.check;
-            if (ID2D1SolidColorBrush* b = Brush(accent ? Design::kAccent : Design::kFillOff, a)) {
-                g_rt->FillEllipse(D2D1::Ellipse(c, rad, rad), b);
+            ID2D1Bitmap* icon = nullptr;
+            if (r.icon) {
+                for (auto& [pixels, bitmap] : g_iconBitmaps) {
+                    if (pixels == &*r.icon) icon = bitmap.Get();
+                }
+                if (!icon) {
+                    ComPtr<ID2D1Bitmap> bitmap;
+                    const D2D1_BITMAP_PROPERTIES props = D2D1::BitmapProperties(
+                        D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+                    if (SUCCEEDED(g_rt->CreateBitmap(D2D1::SizeU(r.icon->width, r.icon->height), r.icon->bgra.data(),
+                                                     r.icon->width * 4, &props, bitmap.GetAddressOf()))) {
+                        icon = bitmap.Get();
+                        g_iconBitmaps.emplace_back(&*r.icon, std::move(bitmap));
+                    }
+                }
             }
-            DrawGlyph(r.glyph, Design::kRowGlyph, D2D1::RectF(c.x - rad, c.y - rad, c.x + rad, c.y + rad),
-                      accent ? Design::kOnAccent : Design::kInk1, a);
+            if (icon) {  // an app's own icon stands in for the circle
+                g_rt->DrawBitmap(icon, circle, a, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+            } else {
+                if (ID2D1SolidColorBrush* b = Brush(accent ? Design::kAccent : Design::kFillOff, a)) {
+                    g_rt->FillEllipse(D2D1::Ellipse(c, rad, rad), b);
+                }
+                const D2D1_COLOR_F ink = accent ? Design::kOnAccent : Design::kInk1;
+                if (r.wifiLevel > 0) {  // glyphRules.wifi: ghost at .30 under the level
+                    if (r.wifiLevel >= 4) {
+                        DrawGlyph(Design::kGlyphWifi, Design::kRowGlyph, circle, ink, a);
+                    } else {
+                        DrawGlyph(Design::kGlyphWifi, Design::kRowGlyph, circle, ink, a * Design::kWifiGhostAlpha);
+                        DrawGlyph(Design::kGlyphWifiLevel[r.wifiLevel - 1], Design::kRowGlyph, circle, ink, a);
+                    }
+                } else {
+                    DrawGlyph(r.glyph, Design::kRowGlyph, circle, ink, a);
+                }
+            }
             const float textX = cx + Design::kRowCircle + Design::kPanelRowGap;
-            const float trail = r.check ? Design::kRowTrailGlyph + Design::kPanelRowGap : 0.0f;
+            const float trail = (r.check || r.lock) ? Design::kRowTrailGlyph + Design::kPanelRowGap : 0.0f;
             const float textW = std::max(10.0f, W - cx - trail - textX);
             const float titleH = Design::kText[static_cast<int>(Text::PanelRow)].lineHeight;
             if (r.caption.empty()) {
@@ -6554,11 +6985,10 @@ void DrawRow(int index, const D2D1_MATRIX_3X2_F& base) {
                 DrawLabel(r.title, Text::PanelRow, textX, top, textW, titleH, Design::kInk1, a);
                 DrawLabel(r.caption, Text::PanelCaption, textX, top + titleH, textW, capH, Design::kInk2, a);
             }
-            if (r.check && r.on) {
-                const float right = W - cx;
-                DrawGlyph(Design::kGlyphCheckmark, Design::kRowTrailGlyph,
-                          D2D1::RectF(right - Design::kRowTrailGlyph, r.y, right, r.y + r.h), Design::kInk1, a);
-            }
+            const float right = W - cx;
+            const D2D1_RECT_F trailBox = D2D1::RectF(right - Design::kRowTrailGlyph, r.y, right, r.y + r.h);
+            if (r.check && r.on) DrawGlyph(Design::kGlyphCheckmark, Design::kRowTrailGlyph, trailBox, Design::kInk1, a);
+            if (r.lock) DrawGlyph(Design::kGlyphLock, Design::kRowTrailGlyph, trailBox, Design::kInk2, a);
             break;
         }
         case RowKind::Sep: {
@@ -6657,6 +7087,7 @@ void Render(float opacity, float scale, float dy) {
             b, Design::kHairline);
     }
     if (g_rt->EndDraw() == static_cast<HRESULT>(D2DERR_RECREATE_TARGET)) {
+        g_iconBitmaps.clear();
         g_rt.Reset();
         g_brush.Reset();
         return;
@@ -6768,9 +7199,26 @@ void Open(int item, bool animate) {
         g.trackT = g.switchOn ? 1.0f : 0.0f;
         g.trackStart = -1.0;
         g_wantDevices = true;
-        if (g_jobEvent) SetEvent(g_jobEvent);
+        Wake();
+    } else if (item == BarContent::kNetwork) {
+        int radio = -1;
+        {
+            std::lock_guard lock(g_dataMutex);
+            radio = g_wifiRadio;
+        }
+        g.switchOn = radio < 0 ? model.net == BarStatus::Net::Wifi : radio == 1;
+        g.rowsOff = false;
+        g.knob.Reset(g.switchOn ? Design::kSwitchW - Design::kSwitchH : 0.0f);
+        g.trackT = g.switchOn ? 1.0f : 0.0f;
+        g.trackStart = -1.0;
+        g_wantWifi = true;  // fresh list now, and once more after a scan
+        Wake();
     } else {
         g.rowsOff = false;
+        if (item == BarContent::kBattery) {
+            g_wantEnergy = true;
+            Wake();
+        }
     }
     if (item == BarContent::kVolume) {
         Audio::g_volume.Reset();
@@ -6853,34 +7301,93 @@ void Activate(const Row& r) {
             Close(true);
             OpenSettings(L"ms-settings:dateandtime");
             break;
+        case kConnectWifi:
+            if (r.on) break;  // already connected
+            if (r.arg.empty()) {
+                // No saved profile: Windows' own network list asks for the password.
+                Close(true);
+                OpenSettings(L"ms-availablenetworks:");
+            } else {
+                {
+                    std::lock_guard lock(g_dataMutex);
+                    g_connectProfile = r.arg;
+                }
+                g_wantConnect = true;
+                Wake();
+            }
+            break;
+        case kOpenWifiSettings:
+            Close(true);
+            OpenSettings(L"ms-settings:network-wifi");
+            break;
+        case kOpenBatterySettings:
+            Close(true);
+            OpenSettings(L"ms-settings:batterysaver");
+            break;
     }
 }
 
 void ToggleRadio() {
-    if (g_wantRadio.load() >= 0 || NowSeconds() < g.radioPendingUntil) return;
+    const bool wifi = g.item == BarContent::kNetwork;
+    if ((wifi ? g_wantWifiRadio : g_wantRadio).load() >= 0 || NowSeconds() < g.radioPendingUntil) return;
     g.switchOn = !g.switchOn;
     g.rowsOff = !g.switchOn;
     g.knob.target = g.switchOn ? Design::kSwitchW - Design::kSwitchH : 0.0f;
     g.trackFrom = g.trackT;
     g.trackStart = NowSeconds();
     g.radioPendingUntil = NowSeconds() + 4.0;
-    g_radioResult = 0;
-    g_wantRadio = g.switchOn ? 1 : 0;
-    if (g_jobEvent) SetEvent(g_jobEvent);
+    if (wifi) {
+        g.rowsOff = false;  // Wi-Fi: switching off empties the list instead of dimming it
+        g_wifiRadioResult = 0;
+        g_wantWifiRadio = g.switchOn ? 1 : 0;
+    } else {
+        g_radioResult = 0;
+        g_wantRadio = g.switchOn ? 1 : 0;
+    }
+    Wake();
+    if (wifi) Relayout();  // the list goes (or waits for networks) at once
     g.dirty = true;
 }
 
 void OnData() {
     const int radio = g_radioResult.exchange(0);
-    if (!g.open || g.item != BarContent::kBluetooth) return;
-    if (radio < 0) {
-        // Windows did not let us switch the radio: undo, and hand over to Settings.
+    const int wifiRadio = g_wifiRadioResult.exchange(0);
+    const int connect = g_connectResult.exchange(0);
+    if (!g.open) return;
+    if (g.item == BarContent::kBluetooth && radio < 0) {
+        // Windows did not let us switch the radio: hand over to Settings.
         g.radioPendingUntil = 0.0;
         Close(true);
         OpenSettings(L"ms-settings:bluetooth");
         return;
     }
-    Relayout();
+    if (g.item == BarContent::kNetwork) {
+        if (wifiRadio < 0) {
+            g.radioPendingUntil = 0.0;
+            Close(true);
+            OpenSettings(L"ms-settings:network-wifi");
+            return;
+        }
+        if (connect < 0) {  // the saved profile did not connect: let Windows ask
+            Close(true);
+            OpenSettings(L"ms-availablenetworks:");
+            return;
+        }
+        int state = -1;
+        {
+            std::lock_guard lock(g_dataMutex);
+            state = g_wifiRadio;
+        }
+        if (state >= 0 && NowSeconds() >= g.radioPendingUntil && (state == 1) != g.switchOn) {
+            g.switchOn = state == 1;
+            g.knob.target = g.switchOn ? Design::kSwitchW - Design::kSwitchH : 0.0f;
+            g.trackFrom = g.trackT;
+            g.trackStart = NowSeconds();
+        }
+    }
+    if (g.item == BarContent::kBluetooth || g.item == BarContent::kNetwork || g.item == BarContent::kBattery) {
+        Relayout();
+    }
 }
 
 void OnStatusChanged() {
@@ -6893,6 +7400,9 @@ void OnStatusChanged() {
             g.slider.target = level;
             g.dirty = true;
         }
+    } else if (g.item == BarContent::kBattery) {
+        const std::wstring value = std::to_wstring(model.battery) + L" %";
+        if (!g.rows.empty() && g.rows[0].value != value) Relayout();
     } else if (g.item == BarContent::kBluetooth && now >= g.radioPendingUntil) {
         const bool on = model.bluetooth == 1;
         if (on != g.switchOn) {
@@ -6972,6 +7482,7 @@ int RowAt(float uy) {
 
 bool Interactive(const Row& r) {
     if (g.rowsOff && (r.kind == RowKind::Item || r.kind == RowKind::Section || r.kind == RowKind::Caption)) return false;
+    if (r.plain) return false;
     return r.kind == RowKind::Item || r.kind == RowKind::Link || r.kind == RowKind::Slider ||
            r.kind == RowKind::CalHeader || (r.kind == RowKind::Header && r.toggle);
 }
