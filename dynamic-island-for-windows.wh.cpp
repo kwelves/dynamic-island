@@ -2250,6 +2250,13 @@ const wchar_t* Loc(const wchar_t* english) {
     // Order: en, fr, es, de, pt, it, ru, tr, hi, zh, ja, ko
     static const Row kRows[] = {
         {L"Media", {nullptr, L"Média", L"Multimedia", L"Medien", L"Mídia", L"Media", L"Медиа", L"Medya", L"मीडिया", L"媒体", L"メディア", L"미디어"}},
+        {L"Sound", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Звук", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Output", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Выход", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Sound Settings\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Настройки звука\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"My Devices", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Мои устройства", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"No devices", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Нет устройств", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Bluetooth Settings\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Настройки Bluetooth\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Date & Time Settings\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Настройки даты и времени\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"now", {nullptr, L"maintenant", L"ahora", L"jetzt", L"agora", L"ora", L"сейчас", L"şimdi", L"अभी", L"现在", L"今", L"지금"}},
         {L"Calendar", {nullptr, L"Calendrier", L"Calendario", L"Kalender", L"Calendário", L"Calendario", L"Календарь", L"Takvim", L"कैलेंडर", L"日历", L"カレンダー", L"캘린더"}},
         {L"Weather", {nullptr, L"Météo", L"Tiempo", L"Wetter", L"Tempo", L"Meteo", L"Погода", L"Hava", L"मौसम", L"天气", L"天気", L"날씨"}},
@@ -5129,6 +5136,32 @@ void Paint(ID2D1RenderTarget* rt, D2D1_SIZE_F size, const BarStatus::Model& mode
 void ReleaseTargetResources();
 }  // namespace BarContent
 
+// The island's own volume alert stays quiet until this GetTickCount64() time,
+// while the bar's Sound panel changes the volume (macOS shows no HUD then).
+std::atomic<uint64_t> g_volumeFlyoutQuietUntil{0};
+
+// Click-to-open panels under the bar (defined after TopBar).
+namespace Panels {
+constexpr UINT kCloseMessage = WM_APP + 0x44C;  // input hooks: Esc / a click elsewhere
+constexpr UINT kStepMessage = WM_APP + 0x44D;   // input hooks: wParam 1 = right, 0 = left
+constexpr UINT kDataMessage = WM_APP + 0x44E;   // worker: Bluetooth list / radio result
+bool HasPanel(int item);
+int OpenItem();
+void Toggle(int item);
+void Track(int item);
+void Close(bool animate);
+void Step(int direction);
+void Tick();
+bool Animating();
+void OnStatusChanged();
+void OnData();
+void OnIslandExpanded();
+void Highlight(int* item, float* alpha);
+void StartThreads();
+void StopThreads();
+void Destroy();
+}  // namespace Panels
+
 // ── Top bar (AppBar) ─────────────────────────────────────────────────────────
 // A full-width strip along the top edge of one monitor, registered with the shell
 // as an application desktop toolbar (SHAppBarMessage, ABE_TOP). Windows takes it
@@ -5243,6 +5276,26 @@ void Paint() {
         g_target->BeginDraw();
         g_target->SetTransform(D2D1::Matrix3x2F::Identity());
         g_target->Clear(g_solid ? g_fill : D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
+
+        // components.md "Плашка подсветки": item box width x 24, y = 4, radius 6,
+        // bar-highlight, under the item whose panel is open (layer 2, below items).
+        int hlItem = -1;
+        float hlAlpha = 0.0f;
+        Panels::Highlight(&hlItem, &hlAlpha);
+        if (hlItem >= 0 && hlAlpha > 0.003f && g_metrics.valid && g_metrics.present[hlItem]) {
+            ComPtr<ID2D1SolidColorBrush> plate;
+            D2D1_COLOR_F c = Design::kBarHighlight;
+            c.a *= hlAlpha;
+            if (SUCCEEDED(g_target->CreateSolidColorBrush(c, plate.GetAddressOf()))) {
+                const D2D1_RECT_F& box = g_metrics.boxes[hlItem];
+                const float top = Design::kBarHighlightInsetY * g_scale;
+                const float radius = Design::kRadiusBarHighlight * g_scale;
+                g_target->FillRoundedRectangle(
+                    D2D1::RoundedRect(D2D1::RectF(box.left, top, box.right, top + Design::kBarHighlightH * g_scale),
+                                      radius, radius),
+                    plate.Get());
+            }
+        }
 
         BarContent::ItemVisual visuals[BarContent::kItemCount];
         for (int i = 0; i < BarContent::kItemCount; ++i) {
@@ -5391,7 +5444,31 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
         case BarStatus::kRefreshMessage:
             InvalidateRect(hwnd, nullptr, FALSE);
+            Panels::OnStatusChanged();
             return 0;
+        case Panels::kCloseMessage:
+            Panels::Close(true);
+            return 0;
+        case Panels::kStepMessage:
+            Panels::Step(wParam ? 1 : -1);
+            return 0;
+        case Panels::kDataMessage:
+            Panels::OnData();
+            return 0;
+        case WM_MOUSEMOVE: {
+            // Menu tracking: with a panel open, sliding onto another item switches to
+            // its panel in the same frame (motion.md "Menu tracking").
+            if (Panels::OpenItem() < 0) return 0;
+            const float x = static_cast<float>(GET_X_LPARAM(lParam));
+            for (int i = 0; i < BarContent::kItemCount; ++i) {
+                const D2D1_RECT_F& r = g_metrics.boxes[i];
+                if (Panels::HasPanel(i) && g_metrics.present[i] && !g_items[i].hidden && x >= r.left && x < r.right) {
+                    Panels::Track(i);
+                    break;
+                }
+            }
+            return 0;
+        }
         case WM_LBUTTONDOWN: {
             // Pressing acts, like macOS; the whole full-height box is the target, and
             // an item hidden by the island is not (components.md "Hit-test").
@@ -5401,7 +5478,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 const D2D1_RECT_F& r = g_metrics.boxes[item];
                 return g_metrics.present[item] && !g_items[item].hidden && pt.x >= r.left && pt.x < r.right;
             };
-            if (hit(BarContent::kLogo)) OpenStartMenu();
+            for (int i = 0; i < BarContent::kItemCount; ++i) {
+                const auto item = static_cast<BarContent::Item>(i);
+                if (!hit(item)) continue;
+                if (Panels::HasPanel(item)) {
+                    Panels::Toggle(item);  // a second click on the open item closes it
+                } else {
+                    Panels::Close(true);
+                    if (item == BarContent::kLogo) OpenStartMenu();
+                }
+                return 0;
+            }
+            Panels::Close(true);
             return 0;
         }
         case WM_DPICHANGED:
@@ -5485,6 +5573,7 @@ void Unregister() {
 
 // Releases the reserved space and destroys the bar. Safe to call repeatedly.
 void Destroy() {
+    Panels::Destroy();
     Unregister();
     BarStatus::g_notifyHwnd = nullptr;
     BarContent::ReleaseTargetResources();
@@ -5565,6 +5654,7 @@ void OnTaskbarCreated(HWND island) {
 // spring, 25 ms later per 40 px of distance from the island (max 100 ms). Other
 // items never move. Repaints only while something is animating.
 void Tick(float dt, const RECT& island, bool islandVisible) {
+    Panels::Tick();
     if (!g_bar || g_fullscreenHidden || !g_metrics.valid) return;
     RECT bar = {};
     if (!GetAnchorRect(&bar)) return;
@@ -5624,6 +5714,1413 @@ void EmergencyRemove() {
 }
 
 }  // namespace TopBar
+
+// ── Bar panels ───────────────────────────────────────────────────────────────
+// Click-to-open panels under the bar items, macOS Control Center style:
+// Sound (volume item), Bluetooth and the calendar (date item).
+//
+// Layout: design/components.md "Модульная панель Control Center" (300 wide,
+// radius 16, padding 10; header 38, section 26, row 34, slider 22 + 2/8,
+// separator 1 + 2 x 5, link 28) and "Положение панели" (y = bar + 6,
+// x = clamp(item.left, 8, screen − 300 − 8), scale origin under the item).
+// Motion: motion.md "Иконка бара → Панель" (panel.open scale 0.94 -> 1 and
+// translateY −6 -> 0, panel.fade 0 -> 1, close = panel.close tween 160 ms to
+// opacity 0 / scale 0.98; the bar's highlight plate appears on mouse down and
+// fades with highlight.off 120 ms) and "Menu tracking" (sliding onto another
+// item switches panels in the same frame, no animation; ← / → do the same;
+// Esc, a click outside or a second click on the item close it).
+//
+// The panel is one layered, topmost, never-activated window (WS_EX_TOOLWINDOW |
+// WS_EX_NOACTIVATE), painted with Direct2D in design units and scaled like the
+// bar. Its material is panel-bg-solid: the design's fallback for the blurred
+// panel-bg. While a panel is open, low-level mouse and keyboard hooks (own
+// thread) watch for Esc, arrows and clicks elsewhere; they are removed again
+// when it closes. Bluetooth calls (WinRT, blocking) run on a worker thread.
+// Everything else runs on the render thread, which owns the bar.
+namespace Panels {
+
+using Design::Text;
+
+// ── Core Audio helpers (render thread, which is a COM STA) ───────────────────
+namespace Audio {
+
+const PROPERTYKEY kFriendlyName = {{0xa45c254e, 0xdf1c, 0x4efd, {0x80, 0x20, 0x67, 0xd1, 0x46, 0xa8, 0x50, 0xe0}}, 14};
+const PROPERTYKEY kFormFactor = {{0x1da5d803, 0xd492, 0x4edd, {0x8c, 0x23, 0xe0, 0xc0, 0xff, 0xee, 0x7f, 0x0e}}, 0};
+
+// IPolicyConfig (undocumented, stable since Windows 7): the only way to change
+// the default output device, used by every audio switcher.
+const CLSID kPolicyConfigClient = {0x870af99c, 0x171d, 0x4f9e, {0xaf, 0x0d, 0xe6, 0x3d, 0xf4, 0x0c, 0x2b, 0xc9}};
+const IID kIidPolicyConfig = {0xf8679f50, 0x850a, 0x41cf, {0x9c, 0x72, 0x43, 0x0f, 0x29, 0x02, 0x90, 0xc8}};
+struct IPolicyConfig : public IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE GetMixFormat(PCWSTR, void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetDeviceFormat(PCWSTR, INT, void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE ResetDeviceFormat(PCWSTR) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetDeviceFormat(PCWSTR, void*, void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetProcessingPeriod(PCWSTR, INT, PINT64, PINT64) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetProcessingPeriod(PCWSTR, PINT64) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetShareMode(PCWSTR, void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetShareMode(PCWSTR, void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetPropertyValue(PCWSTR, const PROPERTYKEY&, PROPVARIANT*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetPropertyValue(PCWSTR, const PROPERTYKEY&, PROPVARIANT*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetDefaultEndpoint(PCWSTR, ERole) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetEndpointVisibility(PCWSTR, INT) = 0;
+};
+
+struct Output {
+    std::wstring id;
+    std::wstring name;
+    bool headphones = false;
+    bool isDefault = false;
+};
+
+ComPtr<IAudioEndpointVolume> g_volume;  // default output, while the Sound panel is open
+
+ComPtr<IMMDeviceEnumerator> Enumerator() {
+    ComPtr<IMMDeviceEnumerator> e;
+    CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(e.GetAddressOf()));
+    return e;
+}
+
+std::wstring IdOf(IMMDevice* device) {
+    std::wstring out;
+    LPWSTR id = nullptr;
+    if (device && SUCCEEDED(device->GetId(&id)) && id) {
+        out = id;
+        CoTaskMemFree(id);
+    }
+    return out;
+}
+
+std::vector<Output> Outputs() {
+    std::vector<Output> out;
+    ComPtr<IMMDeviceEnumerator> e = Enumerator();
+    if (!e) return out;
+    std::wstring defaultId;
+    ComPtr<IMMDevice> def;
+    if (SUCCEEDED(e->GetDefaultAudioEndpoint(eRender, eConsole, def.GetAddressOf()))) defaultId = IdOf(def.Get());
+    ComPtr<IMMDeviceCollection> list;
+    if (FAILED(e->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, list.GetAddressOf())) || !list) return out;
+    UINT count = 0;
+    list->GetCount(&count);
+    for (UINT i = 0; i < count; ++i) {
+        ComPtr<IMMDevice> device;
+        if (FAILED(list->Item(i, device.GetAddressOf())) || !device) continue;
+        Output o;
+        o.id = IdOf(device.Get());
+        ComPtr<IPropertyStore> props;
+        if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, props.GetAddressOf())) && props) {
+            PROPVARIANT v;
+            PropVariantInit(&v);
+            if (SUCCEEDED(props->GetValue(kFriendlyName, &v)) && v.vt == VT_LPWSTR && v.pwszVal) o.name = v.pwszVal;
+            PropVariantClear(&v);
+            PropVariantInit(&v);
+            if (SUCCEEDED(props->GetValue(kFormFactor, &v)) && v.vt == VT_UI4) {
+                o.headphones = v.ulVal == 3 /* Headphones */ || v.ulVal == 5 /* Headset */;
+            }
+            PropVariantClear(&v);
+        }
+        o.isDefault = !defaultId.empty() && o.id == defaultId;
+        if (!o.id.empty() && !o.name.empty()) out.push_back(std::move(o));
+    }
+    return out;
+}
+
+bool SetDefault(const std::wstring& id) {
+    ComPtr<IPolicyConfig> policy;
+    if (FAILED(CoCreateInstance(kPolicyConfigClient, nullptr, CLSCTX_ALL, kIidPolicyConfig,
+                                reinterpret_cast<void**>(policy.GetAddressOf()))) ||
+        !policy) {
+        Wh_Log(L"Sound panel: IPolicyConfig is unavailable; cannot switch the output device.");
+        return false;
+    }
+    bool ok = true;
+    for (ERole role : {eConsole, eMultimedia, eCommunications}) {
+        ok = SUCCEEDED(policy->SetDefaultEndpoint(id.c_str(), role)) && ok;
+    }
+    g_volume.Reset();  // the next read follows the new default device
+    return ok;
+}
+
+IAudioEndpointVolume* Volume() {
+    if (g_volume) return g_volume.Get();
+    ComPtr<IMMDeviceEnumerator> e = Enumerator();
+    ComPtr<IMMDevice> device;
+    if (e && SUCCEEDED(e->GetDefaultAudioEndpoint(eRender, eMultimedia, device.GetAddressOf())) && device) {
+        device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
+                         reinterpret_cast<void**>(g_volume.GetAddressOf()));
+    }
+    return g_volume.Get();
+}
+
+// 0..1; a muted device reads as 0, like the prototype's slider.
+float Level() {
+    IAudioEndpointVolume* v = Volume();
+    if (!v) return 0.0f;
+    float level = 0.0f;
+    BOOL muted = FALSE;
+    v->GetMasterVolumeLevelScalar(&level);
+    v->GetMute(&muted);
+    return muted ? 0.0f : Clamp(level, 0.0f, 1.0f);
+}
+
+// Sets the level; 0 mutes and anything above unmutes (prototype: muted = value <= 0).
+// The island's own volume alert stays quiet meanwhile (macOS shows no HUD here).
+void SetLevel(float level) {
+    g_volumeFlyoutQuietUntil.store(GetTickCount64() + 1500, std::memory_order_relaxed);
+    IAudioEndpointVolume* v = Volume();
+    if (!v) return;
+    level = Clamp(level, 0.0f, 1.0f);
+    const bool mute = level <= 0.001f;
+    if (!mute) v->SetMasterVolumeLevelScalar(level, nullptr);
+    BOOL muted = FALSE;
+    v->GetMute(&muted);
+    if ((muted != FALSE) != mute) v->SetMute(mute, nullptr);
+}
+
+}  // namespace Audio
+
+// ── Bluetooth worker ─────────────────────────────────────────────────────────
+struct BtDevice {
+    std::wstring name;
+    bool connected = false;
+    wchar_t glyph = Design::kGlyphBluetooth;
+};
+
+std::mutex g_dataMutex;  // leaf lock: g_btDevices, g_btLoaded
+std::vector<BtDevice> g_btDevices;
+bool g_btLoaded = false;
+std::atomic<bool> g_wantDevices{false};
+std::atomic<int> g_wantRadio{-1};   // -1 nothing, 0 off, 1 on
+std::atomic<int> g_radioResult{0};  // set by the worker: 1 done, -1 refused
+HANDLE g_jobEvent = nullptr;
+HANDLE g_workerThread = nullptr;
+
+void PostData() {
+    if (HWND bar = BarStatus::g_notifyHwnd.load()) PostMessageW(bar, kDataMessage, 0, 0);
+}
+
+#if DYNAMIC_ISLAND_HAS_BLUETOOTH_WATCHER
+// Paired devices (classic and LE), merged by name. The glyph follows the
+// class-of-device major class: audio/video -> headphone, peripheral -> keyboard.
+std::vector<BtDevice> EnumeratePaired() {
+    using namespace winrt::Windows::Devices::Enumeration;
+    using namespace winrt::Windows::Devices::Bluetooth;
+    std::vector<BtDevice> out;
+    auto props = winrt::single_threaded_vector<winrt::hstring>(
+        {L"System.Devices.Aep.IsConnected", L"System.Devices.Aep.Bluetooth.Cod.Major"});
+    const winrt::hstring selectors[] = {BluetoothDevice::GetDeviceSelectorFromPairingState(true),
+                                        BluetoothLEDevice::GetDeviceSelectorFromPairingState(true)};
+    for (const winrt::hstring& selector : selectors) {
+        auto list = DeviceInformation::FindAllAsync(selector, props, DeviceInformationKind::AssociationEndpoint).get();
+        for (const DeviceInformation& info : list) {
+            BtDevice d;
+            d.name = info.Name().c_str();
+            if (d.name.empty()) continue;
+            auto map = info.Properties();
+            if (auto connected = map.TryLookup(L"System.Devices.Aep.IsConnected")) {
+                d.connected = winrt::unbox_value_or<bool>(connected, false);
+            }
+            if (auto major = map.TryLookup(L"System.Devices.Aep.Bluetooth.Cod.Major")) {
+                const uint8_t value = winrt::unbox_value_or<uint8_t>(major, 0);
+                if (value == 4) d.glyph = Design::kGlyphHeadphone;
+                else if (value == 5) d.glyph = Design::kGlyphKeyboard;
+            }
+            auto same = std::find_if(out.begin(), out.end(), [&](const BtDevice& o) { return o.name == d.name; });
+            if (same == out.end()) {
+                out.push_back(std::move(d));
+            } else {
+                same->connected = same->connected || d.connected;
+                if (same->glyph == Design::kGlyphBluetooth) same->glyph = d.glyph;
+            }
+        }
+    }
+    std::stable_sort(out.begin(), out.end(), [](const BtDevice& a, const BtDevice& b) { return a.connected > b.connected; });
+    return out;
+}
+#endif
+
+bool SetRadio(bool on) {
+    using namespace winrt::Windows::Devices::Radios;
+    if (Radio::RequestAccessAsync().get() != RadioAccessStatus::Allowed) return false;
+    for (const Radio& radio : Radio::GetRadiosAsync().get()) {
+        if (radio.Kind() == RadioKind::Bluetooth) {
+            return radio.SetStateAsync(on ? RadioState::On : RadioState::Off).get() == RadioAccessStatus::Allowed;
+        }
+    }
+    return false;
+}
+
+DWORD WINAPI WorkerProc(void*) {
+    winrt::init_apartment(winrt::apartment_type::multi_threaded);
+    HANDLE waits[2] = {g_stopEvent, g_jobEvent};
+    while (WaitForMultipleObjects(2, waits, FALSE, INFINITE) == WAIT_OBJECT_0 + 1) {
+        const int radio = g_wantRadio.exchange(-1);
+        if (radio >= 0) {
+            bool ok = false;
+            try {
+                ok = SetRadio(radio == 1);
+            } catch (const winrt::hresult_error& e) {
+                Wh_Log(L"Bluetooth panel: switching the radio failed (0x%08X).", static_cast<unsigned>(e.code()));
+            } catch (...) {
+            }
+            if (!ok) Wh_Log(L"Bluetooth panel: Windows refused to switch the radio; opening Bluetooth settings.");
+            g_radioResult = ok ? 1 : -1;
+            g_wantDevices = true;
+            PostData();
+        }
+        if (g_wantDevices.exchange(false)) {
+#if DYNAMIC_ISLAND_HAS_BLUETOOTH_WATCHER
+            try {
+                std::vector<BtDevice> list = EnumeratePaired();
+                std::lock_guard lock(g_dataMutex);
+                g_btDevices = std::move(list);
+                g_btLoaded = true;
+            } catch (const winrt::hresult_error& e) {
+                Wh_Log(L"Bluetooth panel: listing paired devices failed (0x%08X).", static_cast<unsigned>(e.code()));
+            } catch (...) {
+            }
+#else
+            std::lock_guard lock(g_dataMutex);
+            g_btLoaded = true;
+#endif
+            PostData();
+        }
+    }
+    winrt::uninit_apartment();
+    return 0;
+}
+
+// ── Input hooks (only while a panel is open) ─────────────────────────────────
+HANDLE g_inputThread = nullptr;
+DWORD g_inputThreadId = 0;
+std::atomic<bool> g_hooksWanted{false};
+HHOOK g_mouseHook = nullptr;
+HHOOK g_keyHook = nullptr;
+std::mutex g_bodyMutex;  // leaf lock
+RECT g_bodyRect = {};    // the open panel's body, screen px
+
+LRESULT CALLBACK MouseHookProc(int code, WPARAM wParam, LPARAM lParam) {
+    if (code == HC_ACTION && g_hooksWanted.load(std::memory_order_relaxed) &&
+        (wParam == WM_LBUTTONDOWN || wParam == WM_RBUTTONDOWN || wParam == WM_MBUTTONDOWN)) {
+        const POINT pt = reinterpret_cast<MSLLHOOKSTRUCT*>(lParam)->pt;
+        RECT body;
+        {
+            std::lock_guard lock(g_bodyMutex);
+            body = g_bodyRect;
+        }
+        RECT bar = {};
+        const bool onBar = TopBar::GetAnchorRect(&bar) && PtInRect(&bar, pt);
+        if (!PtInRect(&body, pt) && !onBar) {
+            if (HWND h = BarStatus::g_notifyHwnd.load()) PostMessageW(h, kCloseMessage, 0, 0);
+        }
+    }
+    return CallNextHookEx(g_mouseHook, code, wParam, lParam);
+}
+
+// While a panel is open the keyboard belongs to it, as with a macOS menu:
+// Esc closes, ← / → move to the neighbouring item. Other keys pass through.
+LRESULT CALLBACK KeyHookProc(int code, WPARAM wParam, LPARAM lParam) {
+    if (code == HC_ACTION && g_hooksWanted.load(std::memory_order_relaxed) &&
+        (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)) {
+        const DWORD vk = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam)->vkCode;
+        if (vk == VK_ESCAPE || vk == VK_LEFT || vk == VK_RIGHT) {
+            if (HWND h = BarStatus::g_notifyHwnd.load()) {
+                if (vk == VK_ESCAPE) PostMessageW(h, kCloseMessage, 0, 0);
+                else PostMessageW(h, kStepMessage, vk == VK_RIGHT ? 1 : 0, 0);
+            }
+            return 1;
+        }
+    }
+    return CallNextHookEx(g_keyHook, code, wParam, lParam);
+}
+
+DWORD WINAPI InputThreadProc(void*) {
+    MSG msg;
+    PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE);  // create the queue
+    bool quit = false;
+    while (!quit && WaitForSingleObject(g_stopEvent, 0) == WAIT_TIMEOUT) {
+        const bool wanted = g_hooksWanted.load();
+        if (wanted && !g_mouseHook) {
+            g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, MouseHookProc, nullptr, 0);
+            g_keyHook = SetWindowsHookExW(WH_KEYBOARD_LL, KeyHookProc, nullptr, 0);
+        } else if (!wanted && g_mouseHook) {
+            UnhookWindowsHookEx(g_mouseHook);
+            g_mouseHook = nullptr;
+            if (g_keyHook) UnhookWindowsHookEx(g_keyHook);
+            g_keyHook = nullptr;
+        }
+        while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
+            if (msg.message == WM_QUIT) {
+                quit = true;
+                break;
+            }
+            DispatchMessageW(&msg);
+        }
+        if (!quit) MsgWaitForMultipleObjects(1, &g_stopEvent, FALSE, 1000, QS_ALLINPUT);
+    }
+    if (g_mouseHook) UnhookWindowsHookEx(g_mouseHook);
+    if (g_keyHook) UnhookWindowsHookEx(g_keyHook);
+    g_mouseHook = g_keyHook = nullptr;
+    return 0;
+}
+
+void SetHooks(bool on) {
+    if (g_hooksWanted.exchange(on) == on) return;
+    if (g_inputThreadId) PostThreadMessageW(g_inputThreadId, WM_NULL, 0, 0);
+}
+
+void StartThreads() {
+    g_jobEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    g_workerThread = CreateThread(nullptr, 0, WorkerProc, nullptr, 0, nullptr);
+    g_inputThread = CreateThread(nullptr, 0, InputThreadProc, nullptr, 0, &g_inputThreadId);
+}
+
+// Called after g_stopEvent is set.
+void StopThreads() {
+    if (g_inputThreadId) PostThreadMessageW(g_inputThreadId, WM_QUIT, 0, 0);
+    for (HANDLE* h : {&g_workerThread, &g_inputThread}) {
+        if (*h) {
+            WaitForSingleObject(*h, 3000);
+            CloseHandle(*h);
+            *h = nullptr;
+        }
+    }
+    g_inputThreadId = 0;
+    if (g_jobEvent) {
+        CloseHandle(g_jobEvent);
+        g_jobEvent = nullptr;
+    }
+}
+
+// ── Panel model ──────────────────────────────────────────────────────────────
+enum class RowKind { Header, Slider, Section, Caption, Item, Sep, Link, CalHeader, CalWeekdays, CalWeek };
+enum Action { kNoAction, kSetOutput, kOpenSoundSettings, kOpenBluetoothSettings, kOpenDateSettings };
+
+struct Row {
+    RowKind kind = RowKind::Sep;
+    std::wstring title;
+    std::wstring caption;
+    std::wstring arg;
+    wchar_t glyph = 0;
+    bool on = false;
+    bool check = false;   // output rows: a trailing check while on, the circle stays fill-off
+    bool toggle = false;  // header with a switch
+    int action = kNoAction;
+    int week = 0;         // CalWeek: 0-based week of the grid
+    float y = 0.0f;
+    float h = 0.0f;
+};
+
+float RowHeight(RowKind kind) {
+    switch (kind) {
+        case RowKind::Header:
+        case RowKind::CalHeader:
+            return Design::kPanelHeaderH;
+        case RowKind::Slider:
+            return Design::kSliderPadTop + Design::kSliderH + Design::kSliderPadBottom;
+        case RowKind::Section:
+        case RowKind::CalWeekdays:
+            return Design::kPanelSectionH;
+        case RowKind::Caption:  // .mb-caption: one panel-caption line + 4 below
+            return Design::kText[static_cast<int>(Text::PanelCaption)].lineHeight + Design::kPanelSectionBottom;
+        case RowKind::Item:
+            return Design::kPanelRowH;
+        case RowKind::Sep:
+            return Design::kHairline + Design::kSepMarginY * 2.0f;
+        case RowKind::Link:
+        case RowKind::CalWeek:  // a calendar week is a link-height row
+            return Design::kPanelLinkH;
+    }
+    return 0.0f;
+}
+
+struct State {
+    int item = -1;  // BarContent::Item whose panel is open or closing
+    bool open = false;
+    bool closing = false;
+    double closeStart = 0.0;
+    float closeFrom = 1.0f;
+    SpringValue openSpring;  // panel.open, 0 -> 1
+    SpringValue fadeSpring;  // panel.fade, 0 -> 1
+    SpringValue knob;        // switch.knob, 0 or 14
+    SpringValue slider;      // slider.jump, 0..1
+    std::vector<Row> rows;
+    float height = 0.0f;  // design px
+    int hover = -1;
+    int hoverPart = 0;  // calendar header: 1 previous month, 2 next month
+    int press = -1;
+    bool dragging = false;
+    bool mouseTracked = false;
+    double lastLocalVolume = -10.0;
+    bool switchOn = false;
+    bool rowsOff = false;
+    double trackStart = -1.0;
+    float trackFrom = 0.0f;
+    float trackT = 0.0f;  // switch.track: 0 switch-off .. 1 accent
+    double radioPendingUntil = 0.0;
+    int calYear = 0;
+    int calMonth = 0;
+    int hlItem = -1;  // highlight plate on the bar
+    float hlAlpha = 0.0f;
+    double hlOffStart = -1.0;
+    double lastTick = -1.0;
+    bool dirty = false;
+    // window geometry
+    float scale = 1.0f;
+    float marginX = 0.0f;    // px around the body for the shadow
+    float marginTop = 0.0f;  // px above the body (the panel gap)
+    float originX = 0.0f;    // design px: scale origin under the item
+    int wx = 0, wy = 0, ww = 0, wh = 0;
+};
+State g;
+
+bool HasPanel(int item) {
+    return item == BarContent::kVolume || item == BarContent::kBluetooth || item == BarContent::kDate;
+}
+
+int OpenItem() {
+    return g.open ? g.item : -1;
+}
+
+void Highlight(int* item, float* alpha) {
+    *item = g.hlItem;
+    *alpha = g.hlAlpha;
+}
+
+// ── Calendar helpers ─────────────────────────────────────────────────────────
+int DaysIn(int year, int month) {
+    static const int kDays[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    const bool leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+    return month == 2 && leap ? 29 : kDays[month - 1];
+}
+
+int Weekday(int year, int month, int day) {  // 0 = Sunday
+    static const int t[] = {0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4};
+    if (month < 3) year -= 1;
+    return (year + year / 4 - year / 100 + year / 400 + t[month - 1] + day) % 7;
+}
+
+int FirstDayOfWeek() {  // 0 = Sunday, from the setting or the Windows locale
+    const int setting = GetSettingsCopy().firstDayOfWeek;
+    if (setting >= 0 && setting <= 6) return setting;
+    wchar_t buf[4] = {};
+    GetLocaleInfoEx(LOCALE_NAME_USER_DEFAULT, LOCALE_IFIRSTDAYOFWEEK, buf, ARRAYSIZE(buf));
+    return (_wtoi(buf) + 1) % 7;  // Windows: 0 = Monday
+}
+
+int LeadDays() {
+    return (Weekday(g.calYear, g.calMonth, 1) - FirstDayOfWeek() + 7) % 7;
+}
+
+std::wstring MonthTitle() {
+    SYSTEMTIME st = {};
+    st.wYear = static_cast<WORD>(g.calYear);
+    st.wMonth = static_cast<WORD>(g.calMonth);
+    st.wDay = 1;
+    wchar_t buf[64] = {};
+    if (!GetDateFormatEx(LOCALE_NAME_USER_DEFAULT, 0, &st, L"MMMM yyyy", buf, ARRAYSIZE(buf), nullptr)) return L"";
+    std::wstring out = buf;
+    if (!out.empty()) out[0] = static_cast<wchar_t>(towupper(out[0]));
+    return out;
+}
+
+std::wstring WeekdayInitial(int weekday) {  // 0 = Sunday
+    const CALTYPE type = weekday == 0 ? CAL_SSHORTESTDAYNAME7 : CAL_SSHORTESTDAYNAME1 + (weekday - 1);
+    wchar_t buf[16] = {};
+    GetCalendarInfoEx(LOCALE_NAME_USER_DEFAULT, CAL_GREGORIAN, nullptr, type, buf, ARRAYSIZE(buf), nullptr);
+    return buf;
+}
+
+// ── Rows ─────────────────────────────────────────────────────────────────────
+Row MakeRow(RowKind kind, std::wstring title = L"", int action = kNoAction) {
+    Row r;
+    r.kind = kind;
+    r.title = std::move(title);
+    r.action = action;
+    return r;
+}
+
+void BuildRows() {
+    g.rows.clear();
+    if (g.item == BarContent::kVolume) {
+        g.rows.push_back(MakeRow(RowKind::Header, Loc(L"Sound")));
+        g.rows.push_back(MakeRow(RowKind::Slider));
+        g.rows.push_back(MakeRow(RowKind::Section, Loc(L"Output")));
+        for (const Audio::Output& o : Audio::Outputs()) {
+            Row r = MakeRow(RowKind::Item, o.name, kSetOutput);
+            r.glyph = o.headphones ? Design::kGlyphHeadphone : Design::kGlyphSpeakers;
+            r.on = o.isDefault;
+            r.check = true;
+            r.arg = o.id;
+            g.rows.push_back(std::move(r));
+        }
+        g.rows.push_back(MakeRow(RowKind::Sep));
+        g.rows.push_back(MakeRow(RowKind::Link, Loc(L"Sound Settings…"), kOpenSoundSettings));
+    } else if (g.item == BarContent::kBluetooth) {
+        Row header = MakeRow(RowKind::Header, Loc(L"Bluetooth"));
+        header.toggle = BarStatus::Get().bluetooth >= 0;
+        g.rows.push_back(std::move(header));
+        g.rows.push_back(MakeRow(RowKind::Section, Loc(L"My Devices")));
+        bool loaded = false;
+        std::vector<BtDevice> devices;
+        {
+            std::lock_guard lock(g_dataMutex);
+            loaded = g_btLoaded;
+            devices = g_btDevices;
+        }
+        for (const BtDevice& d : devices) {
+            Row r = MakeRow(RowKind::Item, d.name, kOpenBluetoothSettings);
+            r.glyph = d.glyph;
+            r.on = d.connected;
+            if (d.connected) r.caption = Loc(L"Connected");
+            g.rows.push_back(std::move(r));
+        }
+        if (loaded && devices.empty()) g.rows.push_back(MakeRow(RowKind::Caption, Loc(L"No devices")));
+        g.rows.push_back(MakeRow(RowKind::Sep));
+        g.rows.push_back(MakeRow(RowKind::Link, Loc(L"Bluetooth Settings…"), kOpenBluetoothSettings));
+    } else if (g.item == BarContent::kDate) {
+        g.rows.push_back(MakeRow(RowKind::CalHeader, MonthTitle()));
+        g.rows.push_back(MakeRow(RowKind::CalWeekdays));
+        const int weeks = (LeadDays() + DaysIn(g.calYear, g.calMonth) + 6) / 7;
+        for (int w = 0; w < weeks; ++w) {
+            Row r = MakeRow(RowKind::CalWeek);
+            r.week = w;
+            g.rows.push_back(std::move(r));
+        }
+        g.rows.push_back(MakeRow(RowKind::Sep));
+        g.rows.push_back(MakeRow(RowKind::Link, Loc(L"Date & Time Settings…"), kOpenDateSettings));
+    }
+    float y = Design::kPanelPadY;
+    for (Row& r : g.rows) {
+        r.h = RowHeight(r.kind);
+        r.y = y;
+        y += r.h;
+    }
+    g.height = y + Design::kPanelPadY;
+    g.hover = g.press = -1;
+}
+
+// ── Window and drawing ───────────────────────────────────────────────────────
+constexpr wchar_t kClassName[] = L"Windhawk.DynamicIslandPanel";
+HWND g_wnd = nullptr;
+bool g_classRegistered = false;
+HDC g_dc = nullptr;
+HBITMAP g_bitmap = nullptr;
+HGDIOBJ g_oldBitmap = nullptr;
+int g_bitmapW = 0, g_bitmapH = 0;
+ComPtr<ID2D1Factory> g_factory;
+ComPtr<ID2D1DCRenderTarget> g_rt;
+ComPtr<ID2D1SolidColorBrush> g_brush;
+
+LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+bool EnsureWindow() {
+    if (g_wnd) return true;
+    HINSTANCE inst = GetModuleHandleW(nullptr);
+    if (!g_classRegistered) {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = WndProc;
+        wc.hInstance = inst;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.lpszClassName = kClassName;
+        if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+        g_classRegistered = true;
+    }
+    g_wnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST, kClassName,
+                            L"Dynamic Island Panel", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, inst, nullptr);
+    if (!g_wnd) Wh_Log(L"Panels: CreateWindowExW failed (%lu).", GetLastError());
+    return g_wnd != nullptr;
+}
+
+void ReleaseSurface() {
+    g_brush.Reset();
+    g_rt.Reset();
+    if (g_dc) {
+        if (g_oldBitmap) SelectObject(g_dc, g_oldBitmap);
+        DeleteDC(g_dc);
+    }
+    if (g_bitmap) DeleteObject(g_bitmap);
+    g_dc = nullptr;
+    g_bitmap = nullptr;
+    g_oldBitmap = nullptr;
+    g_bitmapW = g_bitmapH = 0;
+}
+
+bool EnsureSurface(int w, int h) {
+    if (g_dc && g_bitmapW == w && g_bitmapH == h && g_rt) return true;
+    if (!g_dc || g_bitmapW != w || g_bitmapH != h) {
+        if (g_dc) {
+            if (g_oldBitmap) SelectObject(g_dc, g_oldBitmap);
+            DeleteDC(g_dc);
+            g_dc = nullptr;
+        }
+        if (g_bitmap) {
+            DeleteObject(g_bitmap);
+            g_bitmap = nullptr;
+        }
+        g_dc = CreateCompatibleDC(nullptr);
+        BITMAPINFO bi = {};
+        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+        bi.bmiHeader.biWidth = w;
+        bi.bmiHeader.biHeight = -h;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        void* bits = nullptr;
+        g_bitmap = CreateDIBSection(g_dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (!g_dc || !g_bitmap) {
+            ReleaseSurface();
+            return false;
+        }
+        g_oldBitmap = SelectObject(g_dc, g_bitmap);
+        g_bitmapW = w;
+        g_bitmapH = h;
+    }
+    if (!g_factory && FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory),
+                                               reinterpret_cast<void**>(g_factory.GetAddressOf())))) {
+        return false;
+    }
+    if (!g_rt) {
+        const D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.0f, 96.0f);
+        if (FAILED(g_factory->CreateDCRenderTarget(&props, g_rt.GetAddressOf()))) return false;
+        g_rt->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+        g_brush.Reset();
+    }
+    return true;
+}
+
+ID2D1SolidColorBrush* Brush(D2D1_COLOR_F c, float alpha = 1.0f) {
+    if (!g_brush) g_rt->CreateSolidColorBrush(c, g_brush.GetAddressOf());
+    c.a *= alpha;
+    if (g_brush) g_brush->SetColor(c);
+    return g_brush.Get();
+}
+
+D2D1_COLOR_F Mix(D2D1_COLOR_F a, D2D1_COLOR_F b, float t) {
+    return D2D1::ColorF(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t, a.a + (b.a - a.a) * t);
+}
+
+void DrawLabel(const std::wstring& text, Text style, float x, float top, float w, float h, D2D1_COLOR_F color,
+               float alpha, DWRITE_TEXT_ALIGNMENT align = DWRITE_TEXT_ALIGNMENT_LEADING, bool tnum = false) {
+    ComPtr<IDWriteTextLayout> layout = DesignType::Layout(text, style, 1.0f, w, h, 1, tnum);
+    if (!layout) return;
+    if (align != DWRITE_TEXT_ALIGNMENT_LEADING) layout->SetTextAlignment(align);
+    if (ID2D1SolidColorBrush* b = Brush(color, alpha)) g_rt->DrawTextLayout(D2D1::Point2F(x, top), layout.Get(), b);
+}
+
+void DrawGlyph(wchar_t glyph, float px, D2D1_RECT_F box, D2D1_COLOR_F color, float alpha) {
+    IDWriteTextFormat* icons = DesignType::Icons(px, 1.0f);
+    if (!icons) return;
+    if (ID2D1SolidColorBrush* b = Brush(color, alpha)) {
+        g_rt->DrawTextW(&glyph, 1, icons, box, b, D2D1_DRAW_TEXT_OPTIONS_NONE);
+    }
+}
+
+D2D1_RECT_F SwitchRect(const Row& r) {
+    const float right = Design::kPanelW - Design::kPanelContentX;
+    const float top = r.y + (r.h - Design::kSwitchH) * 0.5f;
+    return D2D1::RectF(right - Design::kSwitchW, top, right, top + Design::kSwitchH);
+}
+
+D2D1_RECT_F SliderRect(const Row& r) {
+    const float top = r.y + Design::kSliderPadTop;
+    return D2D1::RectF(Design::kPanelContentX, top, Design::kPanelW - Design::kPanelContentX, top + Design::kSliderH);
+}
+
+// Calendar header chevrons: 24 x 24 boxes at the right, 4 apart.
+D2D1_RECT_F ChevronRect(const Row& r, bool next) {
+    const float size = Design::kBarHighlightH;
+    const float right = Design::kPanelW - Design::kPanelContentX - (next ? 0.0f : size + 4.0f);
+    const float top = r.y + (r.h - size) * 0.5f;
+    return D2D1::RectF(right - size, top, right, top + size);
+}
+
+float CalCellWidth() {
+    return (Design::kPanelW - Design::kPanelContentX * 2.0f) / 7.0f;
+}
+
+void DrawShadow(D2D1_RECT_F body) {
+    // shadow-panel: 0 12 36 rgba(0,0,0,.45), drawn as stacked rounded rects (a DC
+    // render target has no blur effect) whose edges spread ±18 around the offset
+    // shape, so the full .45 sits inside it and half of it on its edge, like a
+    // Gaussian; plus the 0.5 px edge ring at .60.
+    constexpr int kSteps = 14;
+    const float layerAlpha = 1.0f - std::pow(1.0f - Design::kPanelShadowAlpha, 1.0f / kSteps);
+    const D2D1_RECT_F base = D2D1::RectF(body.left, body.top + Design::kPanelShadowY, body.right,
+                                         body.bottom + Design::kPanelShadowY);
+    for (int i = 0; i < kSteps; ++i) {
+        const float grow = Design::kPanelShadowStdDev * (1.0f - 2.0f * (i + 0.5f) / kSteps);
+        const D2D1_RECT_F r = D2D1::RectF(base.left - grow, base.top - grow, base.right + grow, base.bottom + grow);
+        const float radius = std::max(0.0f, Design::kRadiusPanel + grow);
+        if (ID2D1SolidColorBrush* b = Brush(D2D1::ColorF(0, 0, 0, layerAlpha))) {
+            g_rt->FillRoundedRectangle(D2D1::RoundedRect(r, radius, radius), b);
+        }
+    }
+    const float e = Design::kPanelEdgeSpread * 0.5f;
+    if (ID2D1SolidColorBrush* b = Brush(D2D1::ColorF(0, 0, 0, Design::kPanelEdgeAlpha))) {
+        g_rt->DrawRoundedRectangle(
+            D2D1::RoundedRect(D2D1::RectF(body.left - e, body.top - e, body.right + e, body.bottom + e),
+                              Design::kRadiusPanel + e, Design::kRadiusPanel + e),
+            b, Design::kPanelEdgeSpread);
+    }
+}
+
+void DrawRow(int index, const D2D1_MATRIX_3X2_F& base) {
+    const Row& r = g.rows[index];
+    const float W = Design::kPanelW;
+    const float cx = Design::kPanelContentX;
+    const bool dimmed = g.rowsOff && (r.kind == RowKind::Item || r.kind == RowKind::Section || r.kind == RowKind::Caption);
+    const float a = dimmed ? Design::kRowsOffAlpha : 1.0f;
+    auto plate = [&](float radius) {
+        const D2D1_COLOR_F* fill = g.press == index ? &Design::kRowPress : g.hover == index ? &Design::kRowHover : nullptr;
+        if (!fill || dimmed) return;
+        const D2D1_RECT_F rr = D2D1::RectF(Design::kPanelRowInset, r.y, W - Design::kPanelRowInset, r.y + r.h);
+        if (ID2D1SolidColorBrush* b = Brush(*fill)) g_rt->FillRoundedRectangle(D2D1::RoundedRect(rr, radius, radius), b);
+    };
+    switch (r.kind) {
+        case RowKind::Header: {
+            DrawLabel(r.title, Text::PanelTitle, cx, r.y, W - cx * 2.0f, r.h, Design::kInk1, 1.0f);
+            if (r.toggle) {
+                const D2D1_RECT_F sw = SwitchRect(r);
+                if (ID2D1SolidColorBrush* b = Brush(Mix(Design::kSwitchOff, Design::kAccent, g.trackT))) {
+                    g_rt->FillRoundedRectangle(D2D1::RoundedRect(sw, Design::kRadiusSwitch, Design::kRadiusSwitch), b);
+                }
+                const float d = Design::kSwitchH - 2.0f;
+                const D2D1_POINT_2F c = D2D1::Point2F(sw.left + 1.0f + g.knob.value + d * 0.5f, sw.top + 1.0f + d * 0.5f);
+                if (ID2D1SolidColorBrush* b = Brush(D2D1::ColorF(0, 0, 0, Design::kKnobShadowAlpha))) {
+                    g_rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(c.x, c.y + Design::kKnobShadowY), d * 0.5f, d * 0.5f), b);
+                }
+                if (ID2D1SolidColorBrush* b = Brush(Design::kKnob)) {
+                    g_rt->FillEllipse(D2D1::Ellipse(c, d * 0.5f, d * 0.5f), b);
+                }
+            }
+            break;
+        }
+        case RowKind::Slider: {
+            const D2D1_RECT_F track = SliderRect(r);
+            const float h = Design::kSliderH;
+            const float v = Clamp(g.slider.value, 0.0f, 1.0f);
+            if (ID2D1SolidColorBrush* b = Brush(Design::kSliderTrack)) {
+                g_rt->FillRoundedRectangle(D2D1::RoundedRect(track, Design::kRadiusSlider, Design::kRadiusSlider), b);
+            }
+            const D2D1_RECT_F fill = D2D1::RectF(track.left, track.top, track.left + h + (track.right - track.left - h) * v, track.bottom);
+            if (ID2D1SolidColorBrush* b = Brush(D2D1::ColorF(0, 0, 0, Design::kKnobShadowAlpha))) {
+                g_rt->FillRoundedRectangle(
+                    D2D1::RoundedRect(D2D1::RectF(fill.left, fill.top + Design::kKnobShadowY, fill.right, fill.bottom + Design::kKnobShadowY),
+                                      Design::kRadiusSlider, Design::kRadiusSlider),
+                    b);
+            }
+            if (ID2D1SolidColorBrush* b = Brush(Design::kKnob)) {
+                g_rt->FillRoundedRectangle(D2D1::RoundedRect(fill, Design::kRadiusSlider, Design::kRadiusSlider), b);
+            }
+            const int percent = static_cast<int>(std::lround(v * 100.0f));
+            DrawGlyph(Design::VolumeGlyph(percent, false), Design::kSliderGlyph,
+                      D2D1::RectF(track.left, track.top, track.left + h, track.bottom), Design::kSliderGlyphInk, 1.0f);
+            break;
+        }
+        case RowKind::Section: {
+            const float lh = Design::kText[static_cast<int>(Text::PanelSection)].lineHeight;
+            DrawLabel(r.title, Text::PanelSection, cx, r.y + r.h - Design::kPanelSectionBottom - lh, W - cx * 2.0f, lh,
+                      Design::kInk2, a);
+            break;
+        }
+        case RowKind::Caption: {
+            const float lh = Design::kText[static_cast<int>(Text::PanelCaption)].lineHeight;
+            DrawLabel(r.title, Text::PanelCaption, cx, r.y, W - cx * 2.0f, lh, Design::kInk2, a);
+            break;
+        }
+        case RowKind::Item: {
+            plate(Design::kRadiusPanelRow);
+            const float rad = Design::kRowCircle * 0.5f;
+            const D2D1_POINT_2F c = D2D1::Point2F(cx + rad, r.y + r.h * 0.5f);
+            const bool accent = r.on && !r.check;
+            if (ID2D1SolidColorBrush* b = Brush(accent ? Design::kAccent : Design::kFillOff, a)) {
+                g_rt->FillEllipse(D2D1::Ellipse(c, rad, rad), b);
+            }
+            DrawGlyph(r.glyph, Design::kRowGlyph, D2D1::RectF(c.x - rad, c.y - rad, c.x + rad, c.y + rad),
+                      accent ? Design::kOnAccent : Design::kInk1, a);
+            const float textX = cx + Design::kRowCircle + Design::kPanelRowGap;
+            const float trail = r.check ? Design::kRowTrailGlyph + Design::kPanelRowGap : 0.0f;
+            const float textW = std::max(10.0f, W - cx - trail - textX);
+            const float titleH = Design::kText[static_cast<int>(Text::PanelRow)].lineHeight;
+            if (r.caption.empty()) {
+                DrawLabel(r.title, Text::PanelRow, textX, r.y, textW, r.h, Design::kInk1, a);
+            } else {
+                const float capH = Design::kText[static_cast<int>(Text::PanelCaption)].lineHeight;
+                const float top = r.y + (r.h - titleH - capH) * 0.5f;
+                DrawLabel(r.title, Text::PanelRow, textX, top, textW, titleH, Design::kInk1, a);
+                DrawLabel(r.caption, Text::PanelCaption, textX, top + titleH, textW, capH, Design::kInk2, a);
+            }
+            if (r.check && r.on) {
+                const float right = W - cx;
+                DrawGlyph(Design::kGlyphCheckmark, Design::kRowTrailGlyph,
+                          D2D1::RectF(right - Design::kRowTrailGlyph, r.y, right, r.y + r.h), Design::kInk1, a);
+            }
+            break;
+        }
+        case RowKind::Sep: {
+            if (ID2D1SolidColorBrush* b = Brush(Design::kSeparator)) {
+                const float y = r.y + Design::kSepMarginY;
+                g_rt->FillRectangle(D2D1::RectF(Design::kSepInsetX, y, W - Design::kSepInsetX, y + Design::kHairline), b);
+            }
+            break;
+        }
+        case RowKind::Link: {
+            plate(Design::kRadiusPanelRow);
+            DrawLabel(r.title, Text::PanelRow, cx, r.y, W - cx * 2.0f, r.h, Design::kInk1, 1.0f);
+            break;
+        }
+        case RowKind::CalHeader: {
+            DrawLabel(r.title, Text::PanelTitle, cx, r.y, W - cx * 2.0f - 56.0f, r.h, Design::kInk1, 1.0f);
+            for (int part = 1; part <= 2; ++part) {
+                const D2D1_RECT_F box = ChevronRect(r, part == 2);
+                if (g.hover == index && g.hoverPart == part) {
+                    if (ID2D1SolidColorBrush* b = Brush(g.press == index ? Design::kRowPress : Design::kRowHover)) {
+                        g_rt->FillRoundedRectangle(
+                            D2D1::RoundedRect(box, Design::kRadiusBarHighlight, Design::kRadiusBarHighlight), b);
+                    }
+                }
+                if (part == 1) {  // the previous-month chevron is the right one, mirrored
+                    const D2D1_POINT_2F mid = D2D1::Point2F((box.left + box.right) * 0.5f, (box.top + box.bottom) * 0.5f);
+                    g_rt->SetTransform(D2D1::Matrix3x2F::Scale(-1.0f, 1.0f, mid) * base);
+                }
+                DrawGlyph(Design::kGlyphChevronRight, Design::kRowTrailGlyph, box, Design::kInk2, 1.0f);
+                g_rt->SetTransform(base);
+            }
+            break;
+        }
+        case RowKind::CalWeekdays: {
+            const float lh = Design::kText[static_cast<int>(Text::PanelSection)].lineHeight;
+            const int first = FirstDayOfWeek();
+            for (int col = 0; col < 7; ++col) {
+                DrawLabel(WeekdayInitial((first + col) % 7), Text::PanelSection, cx + col * CalCellWidth(),
+                          r.y + r.h - Design::kPanelSectionBottom - lh, CalCellWidth(), lh, Design::kInk2, 1.0f,
+                          DWRITE_TEXT_ALIGNMENT_CENTER);
+            }
+            break;
+        }
+        case RowKind::CalWeek: {
+            SYSTEMTIME today = {};
+            GetLocalTime(&today);
+            const int lead = LeadDays();
+            const int days = DaysIn(g.calYear, g.calMonth);
+            const int prevMonth = g.calMonth == 1 ? 12 : g.calMonth - 1;
+            const int prevDays = DaysIn(g.calMonth == 1 ? g.calYear - 1 : g.calYear, prevMonth);
+            for (int col = 0; col < 7; ++col) {
+                const int n = r.week * 7 + col - lead + 1;
+                const bool inMonth = n >= 1 && n <= days;
+                const int day = inMonth ? n : (n < 1 ? prevDays + n : n - days);
+                const bool isToday = inMonth && today.wYear == g.calYear && today.wMonth == g.calMonth && today.wDay == day;
+                const float x0 = cx + col * CalCellWidth();
+                if (isToday) {
+                    const float rad = Design::kRowCircle * 0.5f;
+                    if (ID2D1SolidColorBrush* b = Brush(Design::kAccent)) {
+                        g_rt->FillEllipse(D2D1::Ellipse(D2D1::Point2F(x0 + CalCellWidth() * 0.5f, r.y + r.h * 0.5f), rad, rad), b);
+                    }
+                }
+                DrawLabel(std::to_wstring(day), Text::PanelRow, x0, r.y, CalCellWidth(), r.h,
+                          isToday ? Design::kOnAccent : inMonth ? Design::kInk1 : Design::kInk3, 1.0f,
+                          DWRITE_TEXT_ALIGNMENT_CENTER, true);
+            }
+            break;
+        }
+    }
+}
+
+// Paints the panel at the given animation state and pushes it to the window.
+void Render(float opacity, float scale, float dy) {
+    if (!g_wnd || g.ww <= 0 || g.wh <= 0 || !EnsureSurface(g.ww, g.wh)) return;
+    const RECT rc = {0, 0, g.ww, g.wh};
+    if (FAILED(g_rt->BindDC(g_dc, &rc))) return;
+    g_rt->BeginDraw();
+    g_rt->SetTransform(D2D1::Matrix3x2F::Identity());
+    g_rt->Clear(D2D1::ColorF(0, 0, 0, 0));
+    const D2D1_MATRIX_3X2_F base = D2D1::Matrix3x2F::Scale(scale, scale, D2D1::Point2F(g.originX, 0.0f)) *
+                                   D2D1::Matrix3x2F::Translation(0.0f, dy) *
+                                   D2D1::Matrix3x2F::Scale(g.scale, g.scale) *
+                                   D2D1::Matrix3x2F::Translation(g.marginX, g.marginTop);
+    g_rt->SetTransform(base);
+    const D2D1_RECT_F body = D2D1::RectF(0.0f, 0.0f, Design::kPanelW, g.height);
+    DrawShadow(body);
+    const D2D1_ROUNDED_RECT shape = D2D1::RoundedRect(body, Design::kRadiusPanel, Design::kRadiusPanel);
+    if (ID2D1SolidColorBrush* b = Brush(Design::kPanelBgSolid)) g_rt->FillRoundedRectangle(shape, b);
+    for (int i = 0; i < static_cast<int>(g.rows.size()); ++i) DrawRow(i, base);
+    // panel-rim: inset 0 0 0 1px
+    const float h = Design::kHairline * 0.5f;
+    if (ID2D1SolidColorBrush* b = Brush(Design::kPanelRim)) {
+        g_rt->DrawRoundedRectangle(
+            D2D1::RoundedRect(D2D1::RectF(h, h, Design::kPanelW - h, g.height - h), Design::kRadiusPanel - h,
+                              Design::kRadiusPanel - h),
+            b, Design::kHairline);
+    }
+    if (g_rt->EndDraw() == static_cast<HRESULT>(D2DERR_RECREATE_TARGET)) {
+        g_rt.Reset();
+        g_brush.Reset();
+        return;
+    }
+    POINT dst = {g.wx, g.wy};
+    SIZE size = {g.ww, g.wh};
+    POINT src = {0, 0};
+    BLENDFUNCTION blend = {AC_SRC_OVER, 0, static_cast<BYTE>(std::lround(Clamp(opacity, 0.0f, 1.0f) * 255.0f)),
+                           AC_SRC_ALPHA};
+    UpdateLayeredWindow(g_wnd, nullptr, &dst, &size, g_dc, &src, 0, &blend, ULW_ALPHA);
+}
+
+void RenderCurrent() {
+    if (g.closing) {
+        const float t = static_cast<float>((NowSeconds() - g.closeStart) / Design::kPanelClose.seconds);
+        const float e = Design::Ease(Design::kPanelClose, t);
+        Render(g.closeFrom * (1.0f - e), 1.0f + (Design::kPanelCloseScale - 1.0f) * e, 0.0f);
+    } else {
+        const float o = g.openSpring.value;
+        Render(Clamp(g.fadeSpring.value, 0.0f, 1.0f), Design::kPanelOpenScale + (1.0f - Design::kPanelOpenScale) * o,
+               Design::kPanelOpenDy * (1.0f - o));
+    }
+    g.dirty = false;
+}
+
+// Window rect from the item's box: y = bar + 6, x = clamp(item.left, 8, W − 300 − 8).
+bool Place() {
+    RECT bar = {};
+    if (!TopBar::g_bar || !TopBar::GetAnchorRect(&bar)) return false;
+    const BarContent::Metrics& m = TopBar::g_metrics;
+    if (!m.valid || g.item < 0 || !m.present[g.item]) return false;
+    const float s = std::max(0.05f, TopBar::g_scale);
+    const D2D1_RECT_F box = m.boxes[g.item];
+    const float panelW = Design::kPanelW * s;
+    const RECT& mon = TopBar::g_monitorRect;
+    const float x = std::round(Clamp(static_cast<float>(bar.left) + box.left, mon.left + Design::kPanelMargin * s,
+                                     mon.right - panelW - Design::kPanelMargin * s));
+    const float y = std::round(static_cast<float>(bar.bottom) + Design::kPanelGap * s);
+    g.scale = s;
+    g.marginX = std::ceil(Design::kPanelShadowStdDev * 2.0f * s + Design::kPanelShadowY * s);
+    g.marginTop = std::round(Design::kPanelGap * s);
+    g.originX = Clamp((static_cast<float>(bar.left) + (box.left + box.right) * 0.5f - x) / s, 0.0f, Design::kPanelW);
+    g.wx = static_cast<int>(x - g.marginX);
+    g.wy = static_cast<int>(y - g.marginTop);
+    g.ww = static_cast<int>(std::ceil(panelW + g.marginX * 2.0f));
+    g.wh = static_cast<int>(std::ceil(g.height * s + g.marginTop + g.marginX));
+    std::lock_guard lock(g_bodyMutex);
+    g_bodyRect = {static_cast<LONG>(x), static_cast<LONG>(y), static_cast<LONG>(x + panelW),
+                  static_cast<LONG>(y + g.height * s)};
+    return true;
+}
+
+void InvalidateBar() {
+    if (TopBar::g_bar) InvalidateRect(TopBar::g_bar, nullptr, FALSE);
+}
+
+void HideWindow() {
+    if (g_wnd) ShowWindow(g_wnd, SW_HIDE);
+    if (GetCapture() == g_wnd) ReleaseCapture();
+    g.closing = false;
+    g.item = -1;
+    g.dragging = false;
+}
+
+void Close(bool animate) {
+    if (!g.open) return;
+    g.open = false;
+    SetHooks(false);
+    {
+        std::lock_guard lock(g_bodyMutex);
+        g_bodyRect = {};
+    }
+    Audio::g_volume.Reset();
+    g.hlOffStart = NowSeconds();  // highlight.off
+    if (animate && g_wnd && IsWindowVisible(g_wnd)) {
+        g.closing = true;
+        g.closeStart = NowSeconds();
+        g.closeFrom = Clamp(g.fadeSpring.value, 0.0f, 1.0f);
+        g.dragging = false;
+        if (GetCapture() == g_wnd) ReleaseCapture();
+    } else {
+        HideWindow();
+    }
+}
+
+// Opens `item`'s panel. animate = false is menu tracking: the new panel replaces
+// the old one in the same frame, at rest.
+void Open(int item, bool animate) {
+    if (!HasPanel(item) || !TopBar::g_metrics.valid || !TopBar::g_metrics.present[item] ||
+        TopBar::g_items[item].hidden || !EnsureWindow()) {
+        return;
+    }
+    const BarStatus::Model model = BarStatus::Get();
+    g.item = item;
+    g.open = true;
+    g.closing = false;
+    g.dragging = false;
+    if (GetCapture() == g_wnd) ReleaseCapture();
+    if (item == BarContent::kDate) {
+        SYSTEMTIME now = {};
+        GetLocalTime(&now);
+        g.calYear = now.wYear;
+        g.calMonth = now.wMonth;
+    }
+    if (item == BarContent::kBluetooth) {
+        g.switchOn = model.bluetooth == 1;
+        g.rowsOff = !g.switchOn;
+        g.knob.Reset(g.switchOn ? Design::kSwitchW - Design::kSwitchH : 0.0f);
+        g.trackT = g.switchOn ? 1.0f : 0.0f;
+        g.trackStart = -1.0;
+        g_wantDevices = true;
+        if (g_jobEvent) SetEvent(g_jobEvent);
+    } else {
+        g.rowsOff = false;
+    }
+    if (item == BarContent::kVolume) {
+        Audio::g_volume.Reset();
+        g.slider.Reset(Audio::Level());
+    }
+    BuildRows();
+    if (!Place()) {
+        g.open = false;
+        g.item = -1;
+        return;
+    }
+    g.openSpring.Reset(animate ? 0.0f : 1.0f);
+    g.openSpring.target = 1.0f;
+    g.fadeSpring.Reset(animate ? 0.0f : 1.0f);
+    g.fadeSpring.target = 1.0f;
+    g.hlItem = item;  // mouse down: the plate appears at once
+    g.hlAlpha = 1.0f;
+    g.hlOffStart = -1.0;
+    InvalidateBar();
+    RenderCurrent();
+    SetWindowPos(g_wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    g.lastTick = NowSeconds();
+    SetHooks(true);
+}
+
+void Toggle(int item) {
+    if (g.open && g.item == item) {
+        Close(true);
+    } else {
+        Open(item, !g.open);
+    }
+}
+
+void Track(int item) {
+    if (g.open && g.item != item && HasPanel(item)) Open(item, false);
+}
+
+// ← / →: the neighbouring item with a panel, in screen order, skipping hidden ones.
+void Step(int direction) {
+    if (!g.open) return;
+    std::vector<int> items;
+    for (int i = 0; i < BarContent::kItemCount; ++i) {
+        if (HasPanel(i) && TopBar::g_metrics.present[i] && !TopBar::g_items[i].hidden) items.push_back(i);
+    }
+    std::sort(items.begin(), items.end(), [](int a, int b) {
+        return TopBar::g_metrics.boxes[a].left < TopBar::g_metrics.boxes[b].left;
+    });
+    auto it = std::find(items.begin(), items.end(), g.item);
+    if (it == items.end()) return;
+    const ptrdiff_t index = (it - items.begin()) + (direction > 0 ? 1 : -1);
+    if (index >= 0 && index < static_cast<ptrdiff_t>(items.size())) Open(items[index], false);
+}
+
+void Relayout() {
+    BuildRows();
+    if (Place()) g.dirty = true;
+}
+
+void OpenSettings(const wchar_t* uri) {
+    ShellExecuteW(nullptr, L"open", uri, nullptr, nullptr, SW_SHOWNORMAL);
+}
+
+void Activate(const Row& r) {
+    switch (r.action) {
+        case kSetOutput:
+            if (!r.on && Audio::SetDefault(r.arg)) {
+                g.slider.Reset(Audio::Level());
+                Relayout();
+            }
+            break;
+        case kOpenSoundSettings:
+            Close(true);
+            OpenSettings(L"ms-settings:sound");
+            break;
+        case kOpenBluetoothSettings:
+            Close(true);
+            OpenSettings(L"ms-settings:bluetooth");
+            break;
+        case kOpenDateSettings:
+            Close(true);
+            OpenSettings(L"ms-settings:dateandtime");
+            break;
+    }
+}
+
+void ToggleRadio() {
+    if (g_wantRadio.load() >= 0 || NowSeconds() < g.radioPendingUntil) return;
+    g.switchOn = !g.switchOn;
+    g.rowsOff = !g.switchOn;
+    g.knob.target = g.switchOn ? Design::kSwitchW - Design::kSwitchH : 0.0f;
+    g.trackFrom = g.trackT;
+    g.trackStart = NowSeconds();
+    g.radioPendingUntil = NowSeconds() + 4.0;
+    g_radioResult = 0;
+    g_wantRadio = g.switchOn ? 1 : 0;
+    if (g_jobEvent) SetEvent(g_jobEvent);
+    g.dirty = true;
+}
+
+void OnData() {
+    const int radio = g_radioResult.exchange(0);
+    if (!g.open || g.item != BarContent::kBluetooth) return;
+    if (radio < 0) {
+        // Windows did not let us switch the radio: undo, and hand over to Settings.
+        g.radioPendingUntil = 0.0;
+        Close(true);
+        OpenSettings(L"ms-settings:bluetooth");
+        return;
+    }
+    Relayout();
+}
+
+void OnStatusChanged() {
+    if (!g.open) return;
+    const BarStatus::Model model = BarStatus::Get();
+    const double now = NowSeconds();
+    if (g.item == BarContent::kVolume && !g.dragging && now - g.lastLocalVolume > 1.0) {
+        const float level = model.muted ? 0.0f : model.volume / 100.0f;
+        if (std::fabs(level - g.slider.target) > 0.005f) {
+            g.slider.target = level;
+            g.dirty = true;
+        }
+    } else if (g.item == BarContent::kBluetooth && now >= g.radioPendingUntil) {
+        const bool on = model.bluetooth == 1;
+        if (on != g.switchOn) {
+            g.switchOn = on;
+            g.rowsOff = !on;
+            g.knob.target = on ? Design::kSwitchW - Design::kSwitchH : 0.0f;
+            g.trackFrom = g.trackT;
+            g.trackStart = now;
+            g.dirty = true;
+        }
+    }
+}
+
+void OnIslandExpanded() {
+    Close(true);
+}
+
+bool Animating() {
+    return g.closing || g.hlOffStart >= 0.0 || g.trackStart >= 0.0 ||
+           (g.open && (g.openSpring.value != g.openSpring.target || g.fadeSpring.value != g.fadeSpring.target ||
+                       g.knob.value != g.knob.target || g.slider.value != g.slider.target || g.dirty));
+}
+
+// Every render-loop iteration (and while the island is parked, as long as
+// Animating()). Steps the springs and tweens and repaints only what moved.
+void Tick() {
+    const double now = NowSeconds();
+    const float dt = g.lastTick < 0.0 ? 0.0f : Clamp(static_cast<float>(now - g.lastTick), 0.0f, 0.05f);
+    g.lastTick = now;
+    if ((g.open || g.closing) && (!TopBar::g_bar || TopBar::g_fullscreenHidden)) {
+        Close(false);
+        HideWindow();
+    }
+    if (g.open) {
+        if (g.item == BarContent::kVolume) {
+            g_volumeFlyoutQuietUntil.store(GetTickCount64() + 400, std::memory_order_relaxed);
+        }
+        bool moving = g.dirty;
+        auto step = [&](SpringValue& sv, const Design::SpringParams& p) {
+            if (sv.value == sv.target && sv.velocity == 0.0f) return;
+            sv.Step(dt, p.stiffness, p.damping);
+            moving = true;
+        };
+        step(g.openSpring, Design::kPanelOpen);
+        step(g.fadeSpring, Design::kPanelFade);
+        step(g.knob, Design::kSwitchKnob);
+        if (!g.dragging) step(g.slider, Design::kSliderJump);
+        if (g.trackStart >= 0.0) {
+            const float t = static_cast<float>((now - g.trackStart) / Design::kSwitchTrack.seconds);
+            g.trackT = g.trackFrom + ((g.switchOn ? 1.0f : 0.0f) - g.trackFrom) * Design::Ease(Design::kSwitchTrack, t);
+            if (t >= 1.0f) g.trackStart = -1.0;
+            moving = true;
+        }
+        if (moving) RenderCurrent();
+    } else if (g.closing) {
+        RenderCurrent();
+        if (now - g.closeStart >= Design::kPanelClose.seconds) HideWindow();
+    }
+    if (g.hlOffStart >= 0.0) {
+        const float t = static_cast<float>((now - g.hlOffStart) / Design::kHighlightOff.seconds);
+        g.hlAlpha = 1.0f - Design::Ease(Design::kHighlightOff, t);
+        if (t >= 1.0f) {
+            g.hlAlpha = 0.0f;
+            g.hlItem = -1;
+            g.hlOffStart = -1.0;
+        }
+        InvalidateBar();
+    }
+}
+
+int RowAt(float uy) {
+    for (int i = 0; i < static_cast<int>(g.rows.size()); ++i) {
+        if (uy >= g.rows[i].y && uy < g.rows[i].y + g.rows[i].h) return i;
+    }
+    return -1;
+}
+
+bool Interactive(const Row& r) {
+    if (g.rowsOff && (r.kind == RowKind::Item || r.kind == RowKind::Section || r.kind == RowKind::Caption)) return false;
+    return r.kind == RowKind::Item || r.kind == RowKind::Link || r.kind == RowKind::Slider ||
+           r.kind == RowKind::CalHeader || (r.kind == RowKind::Header && r.toggle);
+}
+
+bool Inside(D2D1_RECT_F r, float x, float y, float pad = 0.0f) {
+    return x >= r.left - pad && x <= r.right + pad && y >= r.top - pad && y <= r.bottom + pad;
+}
+
+float SliderValueAt(const Row& r, float ux) {
+    const D2D1_RECT_F track = SliderRect(r);
+    const float h = Design::kSliderH;
+    return Clamp((ux - track.left - h * 0.5f) / std::max(1.0f, track.right - track.left - h), 0.0f, 1.0f);
+}
+
+void SetLocalVolume(float v) {
+    g.lastLocalVolume = NowSeconds();
+    Audio::SetLevel(v);
+}
+
+LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    const float ux = (static_cast<float>(GET_X_LPARAM(lParam)) - g.marginX) / g.scale;
+    const float uy = (static_cast<float>(GET_Y_LPARAM(lParam)) - g.marginTop) / g.scale;
+    switch (msg) {
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_MOUSEMOVE: {
+            if (!g.open) return 0;
+            if (!g.mouseTracked) {
+                TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
+                g.mouseTracked = TrackMouseEvent(&tme) != FALSE;
+            }
+            if (g.dragging) {  // dragging follows the cursor 1:1, no spring
+                for (const Row& r : g.rows) {
+                    if (r.kind == RowKind::Slider) {
+                        const float v = SliderValueAt(r, ux);
+                        g.slider.Reset(v);
+                        SetLocalVolume(v);
+                        g.dirty = true;
+                        break;
+                    }
+                }
+                return 0;
+            }
+            int hover = RowAt(uy);
+            if (hover >= 0 && (!Interactive(g.rows[hover]) || g.rows[hover].kind == RowKind::Slider)) hover = -1;
+            int part = 0;
+            if (hover >= 0 && g.rows[hover].kind == RowKind::CalHeader) {
+                part = Inside(ChevronRect(g.rows[hover], false), ux, uy) ? 1 : Inside(ChevronRect(g.rows[hover], true), ux, uy) ? 2 : 0;
+                if (!part) hover = -1;
+            }
+            if (hover >= 0 && g.rows[hover].kind == RowKind::Header) hover = -1;  // the switch has no hover plate
+            if (hover != g.hover || part != g.hoverPart) {
+                g.hover = hover;
+                g.hoverPart = part;
+                if (g.press >= 0 && g.press != hover) g.press = -1;
+                g.dirty = true;
+            }
+            return 0;
+        }
+        case WM_MOUSELEAVE:
+            g.mouseTracked = false;
+            if (g.hover >= 0 || g.press >= 0) {
+                g.hover = g.press = -1;
+                g.hoverPart = 0;
+                g.dirty = true;
+            }
+            return 0;
+        case WM_LBUTTONDOWN: {
+            if (!g.open) return 0;
+            if (ux < 0.0f || ux > Design::kPanelW || uy < 0.0f || uy > g.height) {  // the shadow margin
+                Close(true);
+                return 0;
+            }
+            const int i = RowAt(uy);
+            if (i < 0 || !Interactive(g.rows[i])) return 0;
+            const Row& r = g.rows[i];
+            if (r.kind == RowKind::Slider) {
+                if (!Inside(SliderRect(r), ux, uy, 4.0f)) return 0;
+                g.dragging = true;
+                SetCapture(hwnd);
+                const float v = SliderValueAt(r, ux);
+                g.slider.target = v;  // a click on the track: slider.jump
+                SetLocalVolume(v);
+                g.dirty = true;
+            } else if (r.kind == RowKind::Header) {
+                if (Inside(SwitchRect(r), ux, uy, 6.0f)) ToggleRadio();
+            } else if (r.kind == RowKind::CalHeader) {
+                const int part = Inside(ChevronRect(r, false), ux, uy) ? -1 : Inside(ChevronRect(r, true), ux, uy) ? 1 : 0;
+                if (part) {
+                    g.calMonth += part;
+                    if (g.calMonth < 1) { g.calMonth = 12; --g.calYear; }
+                    if (g.calMonth > 12) { g.calMonth = 1; ++g.calYear; }
+                    const int hoverPart = g.hoverPart;
+                    Relayout();
+                    g.hover = i;
+                    g.hoverPart = hoverPart;
+                    g.press = i;
+                }
+            } else {
+                g.press = i;
+                g.dirty = true;
+            }
+            return 0;
+        }
+        case WM_LBUTTONUP: {
+            if (g.dragging) {
+                g.dragging = false;
+                if (GetCapture() == hwnd) ReleaseCapture();
+                return 0;
+            }
+            const int pressed = g.press;
+            g.press = -1;
+            g.dirty = true;
+            if (pressed >= 0 && pressed == RowAt(uy) && pressed < static_cast<int>(g.rows.size()) &&
+                (g.rows[pressed].kind == RowKind::Item || g.rows[pressed].kind == RowKind::Link)) {
+                const Row row = g.rows[pressed];  // Activate may rebuild the rows
+                Activate(row);
+            }
+            return 0;
+        }
+        case WM_CAPTURECHANGED:
+            g.dragging = false;
+            return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+// Render thread, from TopBar::Destroy.
+void Destroy() {
+    g.open = false;
+    SetHooks(false);
+    HideWindow();
+    g.hlItem = -1;
+    g.hlAlpha = 0.0f;
+    g.hlOffStart = -1.0;
+    Audio::g_volume.Reset();
+    ReleaseSurface();
+    g_factory.Reset();
+    if (g_wnd) {
+        DestroyWindow(g_wnd);
+        g_wnd = nullptr;
+    }
+    if (g_classRegistered) {
+        UnregisterClassW(kClassName, GetModuleHandleW(nullptr));
+        g_classRegistered = false;
+    }
+}
+
+}  // namespace Panels
 
 // ── Bar notch ────────────────────────────────────────────────────────────────
 // Top bar + Notch shape: the island *is* the bar's notch. At rest it is exactly as
@@ -10453,6 +11950,7 @@ static void GetNetworkUsage(float& outUpMbps, float& outDownMbps) {
 // Event-driven rather than polled: a 1s poll turned a held volume key into
 // one visible step per second.
 void ApplyVolumeReading(float level, bool muted, bool canSurface) {
+    if (GetTickCount64() < g_volumeFlyoutQuietUntil.load(std::memory_order_relaxed)) canSurface = false;
     const int percent = ClampInt(static_cast<int>(level * 100.0f + 0.5f), 0, 100);
 
     bool flyoutEnabled = false;
@@ -26889,7 +28387,9 @@ DWORD WINAPI RenderThreadProc(void*) {
             // clipboard update, etc.) wakes this thread while hidden. Nothing
             // is being paced, so give the system timer resolution back.
             setHighResTimer(false);
-            MsgWaitForMultipleObjects(1, &g_stopEvent, FALSE, INFINITE, QS_ALLINPUT);
+            // The bar stays while the island is hidden; keep its panel animating.
+            Panels::Tick();
+            MsgWaitForMultipleObjects(1, &g_stopEvent, FALSE, Panels::Animating() ? 16 : INFINITE, QS_ALLINPUT);
             nextFrameTarget = std::chrono::steady_clock::now();
             continue;
         }
@@ -26926,7 +28426,9 @@ DWORD WINAPI RenderThreadProc(void*) {
                         g_autoHiddenParked = false;
                     }
                 } else {
-                    MsgWaitForMultipleObjects(1, &g_stopEvent, FALSE, INFINITE, QS_ALLINPUT);
+                    Panels::Tick();
+                    MsgWaitForMultipleObjects(1, &g_stopEvent, FALSE, Panels::Animating() ? 16 : INFINITE,
+                                              QS_ALLINPUT);
                 }
                 nextFrameTarget = std::chrono::steady_clock::now();
                 continue;
@@ -27349,6 +28851,7 @@ DWORD WINAPI RenderThreadProc(void*) {
         float notchRadiusTarget = Design::kIdle.radiusBottom;
         float notchEarTarget = Design::kIdle.radiusEar;
         bool notchDrop = false;
+        bool notchExpanded = false;
         if (const float barNotchPx = BarNotchHeightPx(g_settings); barNotchPx > 0.0f) {
             const float k = g_settings.sizeScale;
             secondary.reset();
@@ -27374,6 +28877,7 @@ DWORD WINAPI RenderThreadProc(void*) {
                 notchRadiusTarget = st.radiusBottom;
                 notchEarTarget = st.radiusEar;
                 notchDrop = &st == &Design::kNotify;
+                notchExpanded = expanded;
             }
         }
 
@@ -27492,6 +28996,13 @@ DWORD WINAPI RenderThreadProc(void*) {
 
         nudgeSpring.Step(dt * speed, 280.0f * styleStiffnessMult, 24.0f * styleDampingMult);
 
+        // One or the other: the island expanding closes an open bar panel (only on
+        // the transition, so a pinned island still lets a panel open).
+        {
+            static bool wasNotchExpanded = false;
+            if (notchExpanded && !wasNotchExpanded) Panels::OnIslandExpanded();
+            wasNotchExpanded = notchExpanded;
+        }
         // Top bar: items next to the island hide while it is wide enough to reach them.
         TopBar::Tick(dt * speed, pillRect,
                      widthSpring.value > 1.0f && heightSpring.value > 1.0f && IsWindowVisible(hwnd));
@@ -27955,6 +29466,7 @@ bool StartThreads() {
 #endif
     g_bluetoothThread = CreateThread(nullptr, 0, BluetoothThreadProc, nullptr, 0, nullptr);
     BarStatus::g_thread = CreateThread(nullptr, 0, BarStatus::ThreadProc, nullptr, 0, nullptr);
+    Panels::StartThreads();
     SubscribeDndNotification();
 
     return true;
@@ -27992,6 +29504,7 @@ void StopThreads() {
     g_mouseThreadId = 0;
     g_bluetoothThread = nullptr;
     BarStatus::g_thread = nullptr;
+    Panels::StopThreads();
 
     if (g_stopEvent) {
         CloseHandle(g_stopEvent);
