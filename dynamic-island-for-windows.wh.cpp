@@ -120,7 +120,7 @@ We love community contributions! To ensure high-quality updates, please follow t
   - Enabled: true
     $name: Top bar
     $description: Shows a full-width bar along the top edge of the island's monitor and reserves that space, so maximised windows stop below it. The island sits in the middle of the bar. While the bar is on, the island always uses a top position, and "Follow Mouse" falls back to the primary monitor.
-  - Material: acrylic
+  - Material: solid
     $name: Bar material
     $description: Acrylic needs Windows "Transparency effects" turned on; without them, or on Windows older than 10 1803, the bar uses the solid theme colour.
     $options:
@@ -170,7 +170,7 @@ We love community contributions! To ensure high-quality updates, please follow t
   - BorderMergedMode: false
     $name: Border-Merged Mode
     $description: Attach the island flush to the top edge of the monitor without a floating gap.
-  - ShapeStyle: default
+  - ShapeStyle: notch
     $name: Island Shape Style
     $description: Change the overall shape of the island (Pill, Windows 11, or macOS Notch).
     $options:
@@ -4644,6 +4644,36 @@ void EmergencyRemove() {
 }
 
 }  // namespace TopBar
+
+// ── Bar notch ────────────────────────────────────────────────────────────────
+// Top bar + Notch shape: the island *is* the bar's notch. At rest it is exactly as
+// tall as the bar and drawn in the bar's colour with no shadow, depth, bloom or
+// contour, so the two read as one strip and only the notch's width and bottom
+// corners set it apart (invisible against a solid bar). Those effects fade back in
+// as the notch grows down past the bar.
+//
+// Bar height in stage px while the notch is merged with the bar, else 0.
+float BarNotchHeightPx(const Settings& s) {
+    if (!s.topBarEnabled || !s.notchStyle) return 0.0f;
+    RECT bar = {};
+    if (!TopBar::GetAnchorRect(&bar)) return 0.0f;
+    return static_cast<float>(bar.bottom - bar.top);
+}
+
+// The same height in content px (before sizeScale), else 0.
+float BarNotchHeight(const Settings& s) {
+    return BarNotchHeightPx(s) / std::max(0.05f, s.sizeScale);
+}
+
+// How merged a pill of `heightPx` is with the bar: 1 at rest, easing to 0 over
+// the first 24 content px it grows below the bar.
+float BarNotchMerge(const Settings& s, float heightPx) {
+    const float barPx = BarNotchHeightPx(s);
+    if (barPx <= 0.0f) return 0.0f;
+    const float span = 24.0f * std::max(0.05f, s.sizeScale);
+    const float t = Clamp((heightPx - barPx) / span, 0.0f, 1.0f);
+    return 1.0f - t * t * (3.0f - 2.0f * t);
+}
 
 // Always unregisters before registering so a settings change never leaks the
 // previous hotkey. Safe to call before the overlay window exists (no-ops).
@@ -13783,7 +13813,8 @@ class Renderer {
         metrics.clockWidth =
             MeasureTextWidthCached(WidestDigitForm(clock), fmt, idleClockWidthCache_);
 
-        metrics.hasWeather = settings.weather;
+        // Bar notch: the resting notch shows the time only (weather lives in the bar).
+        metrics.hasWeather = settings.weather && BarNotchHeight(settings) <= 0.0f;
         if (metrics.hasWeather) {
             // Mirrors the label DrawIdleDashboard builds, including the no-data
             // placeholder, so the reserved slot matches what gets drawn.
@@ -13817,6 +13848,45 @@ class Renderer {
         total = std::ceil(total / IdleStripLayout::kWidthQuantum) * IdleStripLayout::kWidthQuantum;
         metrics.totalWidth = Clamp(total, IdleStripLayout::kMinWidth, IdleStripLayout::kMaxWidth);
         return metrics;
+    }
+
+    // Bar notch media pill: [cover | time | visualiser], with the time on the
+    // notch's centre line so it stays put while the notch widens out of the
+    // resting time-only notch. Content px; 0 when the bar notch is not active.
+    float MeasureNotchMediaWidth(const SharedState& state, const Settings& settings) {
+        const float restH = BarNotchHeight(settings);
+        if (restH <= 0.0f) return 0.0f;
+        EnsureTextFormats(settings.sizeScale, settings.fontFamily, settings.textScale);
+        IDWriteTextFormat* fmt = idleTextFormat_ ? idleTextFormat_.Get() : smallTextFormat_.Get();
+        SYSTEMTIME local = {};
+        GetLocalTime(&local);
+        const std::wstring clock = FormatIslandTime(local, settings.clockFollowSystem,
+                                                    settings.use24HourClock, settings.showSeconds);
+        const float clockW = MeasureTextWidthCached(WidestDigitForm(clock), fmt, idleClockWidthCache_);
+        const NotchMediaSides sides = NotchMediaSideWidths(state, settings, restH);
+        float total = clockW + 2.0f * std::max(sides.left, sides.right);
+        total = std::ceil(total / MediaPillLayout::kWidthQuantum) * MediaPillLayout::kWidthQuantum;
+        return total;
+    }
+
+    // Room each side of the centred time needs, content px, including the gap
+    // to the time. Shared by the sizer above and DrawMedia.
+    struct NotchMediaSides {
+        float left = 0.0f;
+        float right = 0.0f;
+    };
+    static NotchMediaSides NotchMediaSideWidths(const SharedState& state, const Settings& settings,
+                                                float restH) {
+        constexpr float kArtPad = 6.0f;
+        constexpr float kGap = 12.0f;
+        NotchMediaSides sides;
+        sides.left = kArtPad + std::max(8.0f, restH - kArtPad * 2.0f) + kGap;
+        // Matches DrawMedia's waveRect: 28 wide, 14 from the edge, shifted 22 for
+        // a privacy dot.
+        const bool privacy = state.system.micActive || state.system.cameraActive;
+        sides.right = 14.0f + 28.0f + (privacy ? 22.0f : 0.0f) + kGap;
+        (void)settings;
+        return sides;
     }
 
     // Collapsed media pill, with the optional clock. Returns content-space
@@ -14507,9 +14577,11 @@ class Renderer {
             pillRadii_[pillCount_] = radius;
             ++pillCount_;
         }
-        if (contentAlpha > 0.01f) {
+        // Bar notch: 1 while the pill rests merged with the top bar.
+        barMerge_ = BarNotchMerge(settings, h);
+        if (contentAlpha > 0.01f && barMerge_ < 0.999f) {
             const float savedOpacity = settingsOpacity_;
-            settingsOpacity_ = savedOpacity * contentAlpha;
+            settingsOpacity_ = savedOpacity * contentAlpha * (1.0f - barMerge_);
             DrawSoftShadow(rect, radius);
             settingsOpacity_ = savedOpacity;
         }
@@ -14881,8 +14953,23 @@ class Renderer {
             // An opaque fill would hide the backdrop, so cap it.
             bg.a = std::min(bg.a, settings.backdropFillAlpha);
         }
+        // Bar notch: as opaque as the solid bar it merges into.
+        bg.a = bg.a + (1.0f - bg.a) * barMerge_;
         if (ID2D1SolidColorBrush* fillBrush = AcquireBrush(bg)) {
             FillIslandShape(rect, radius, settings.w11Style, settings.notchStyle, fillBrush);
+        }
+
+        // Depth, bloom and contour would set a resting notch apart from the bar;
+        // they fade in as it grows below the bar.
+        const float savedOpacity = settingsOpacity_;
+        settingsOpacity_ = savedOpacity * (1.0f - barMerge_);
+        struct RestoreOpacity {
+            float& ref;
+            float value;
+            ~RestoreOpacity() { ref = value; }
+        } restoreOpacity{settingsOpacity_, savedOpacity};
+        if (barMerge_ > 0.999f) {
+            return;
         }
 
         if (settings.materialDepth) {
@@ -17589,9 +17676,16 @@ class Renderer {
         constexpr float kArtMorphEndHeight = 120.0f;
         constexpr float kCollapsedArtPad = 6.0f;
         constexpr float kCollapsedArtSize = kCollapsedPillHeight - kCollapsedArtPad * 2.0f;
+        // Bar notch: the collapsed pill is exactly as tall as the bar, so the cover is
+        // sized from that height, and the layout becomes [cover | time | visualiser].
+        const float notchRestH = BarNotchHeight(settings);
+        const bool notchLayout = notchRestH > 0.0f && !CollapsedLyricsActive(state, settings);
+        const float collapsedPillH = notchRestH > 0.0f ? notchRestH : kCollapsedPillHeight;
+        const float collapsedArtSize =
+            notchRestH > 0.0f ? std::max(8.0f, collapsedPillH - kCollapsedArtPad * 2.0f) : kCollapsedArtSize;
         // Raw progress straight from the island's height.
-        const float artMorphRaw = Clamp((height - kCollapsedPillHeight) /
-                                        (kArtMorphEndHeight - kCollapsedPillHeight), 0.0f, 1.0f);
+        const float artMorphRaw = Clamp((height - collapsedPillH) /
+                                        (kArtMorphEndHeight - collapsedPillH), 0.0f, 1.0f);
 
         // Shrinking follows the height exactly (unchanged). Expanding is not
         // allowed to run faster than kArtExpandSec for the full circle -> square
@@ -17626,13 +17720,13 @@ class Renderer {
             artBadgeAlpha_ = 0.0f;
         }
         float pillClockSection = 0.0f;
-        if (settings.mediaPillClock && idleTextFormat_) {
+        if (settings.mediaPillClock && idleTextFormat_ && !notchLayout) {
             pillClockSection = MeasureMediaPill(state, settings).sectionWidth;
         }
         const D2D1_RECT_F collapsedArtRect = D2D1::RectF(
             rect.left + pillClockSection + kCollapsedArtPad, rect.top + kCollapsedArtPad,
-            rect.left + pillClockSection + kCollapsedArtPad + kCollapsedArtSize,
-            rect.top + kCollapsedArtPad + kCollapsedArtSize);
+            rect.left + pillClockSection + kCollapsedArtPad + collapsedArtSize,
+            rect.top + kCollapsedArtPad + collapsedArtSize);
         auto lerpF = [](float a, float b, float t) { return a + (b - a) * t; };
         const D2D1_RECT_F normalArtRect = D2D1::RectF(
             rect.left + MediaLayout::kArtInsetX, rect.top + MediaLayout::kArtInsetY,
@@ -17655,7 +17749,7 @@ class Renderer {
             lerpF(collapsedArtRect.top, expandedArtRect.top, artMorph),
             lerpF(collapsedArtRect.right, expandedArtRect.right, artMorph),
             lerpF(collapsedArtRect.bottom, expandedArtRect.bottom, artMorph));
-        const float morphArtRadius = lerpF(kCollapsedArtSize * 0.5f, expandedArtRadius, artMorph);
+        const float morphArtRadius = lerpF(collapsedArtSize * 0.5f, expandedArtRadius, artMorph);
 
         // Expanded UI
         if (expandedAlpha > 0.01f && mask && layer) {
@@ -17952,7 +18046,7 @@ class Renderer {
             // Optional clock section on the left. Zero wide when the option is
             // off, so the cover sits exactly where it always did.
             MediaPillMetrics pillMetrics;
-            if (settings.mediaPillClock && idleTextFormat_) {
+            if (settings.mediaPillClock && idleTextFormat_ && !notchLayout) {
                 pillMetrics = MeasureMediaPill(state, settings);
             }
             const float clockSection = pillMetrics.sectionWidth;
@@ -17994,6 +18088,25 @@ class Renderer {
                                         D2D1::RectF(textLeft, rect.top + 4.0f, textRight, rect.bottom - 4.0f),
                                         now, lyricsAlpha);
                 }
+            }
+
+            // Bar notch: the time sits on the notch's centre line, where the
+            // resting notch shows it, so it does not move as the notch widens.
+            if (notchLayout && idleTextFormat_) {
+                SYSTEMTIME local = {};
+                GetLocalTime(&local);
+                const std::wstring clockText = FormatIslandTime(local, settings.clockFollowSystem,
+                                                                settings.use24HourClock,
+                                                                settings.showSeconds);
+                const float clockW = MeasureTextWidthCached(WidestDigitForm(clockText),
+                                                            idleTextFormat_.Get(), idleClockWidthCache_);
+                const float mid = (rect.left + rect.right) * 0.5f;
+                textBrush_->SetOpacity(0.96f);
+                target_->DrawTextW(clockText.c_str(), static_cast<UINT32>(clockText.size()),
+                                   idleTextFormat_.Get(),
+                                   D2D1::RectF(mid - clockW * 0.5f, rect.top, mid + clockW * 0.5f, rect.bottom),
+                                   textBrush_.Get(), D2D1_DRAW_TEXT_OPTIONS_NONE);
+                textBrush_->SetOpacity(1.0f);
             }
 
             // Clock + divider on the left, same face, size and time format as the
@@ -18056,15 +18169,15 @@ class Renderer {
             // sticking out until the window stops painting.
             float hideS = 1.0f;
             if (islandHiding_) {
-                const float needW = pillClockSection + kCollapsedArtPad * 2.0f + kCollapsedArtSize;
+                const float needW = pillClockSection + kCollapsedArtPad * 2.0f + collapsedArtSize;
                 const float curW = rect.right - rect.left;
-                hideS = SmoothStep01(std::min(height / kCollapsedPillHeight, curW / needW));
+                hideS = SmoothStep01(std::min(height / collapsedPillH, curW / needW));
             }
             // On the Media tab the cover morphs circle -> square. On any other tab it
             // stays a small circle on the collapsed pill and never flies into the
             // expanded layout, so it can't show up on top of the lyrics.
             const D2D1_RECT_F artBaseRect = onMediaTab ? morphArtRect : collapsedArtRect;
-            const float artBaseRadius = onMediaTab ? morphArtRadius : kCollapsedArtSize * 0.5f;
+            const float artBaseRadius = onMediaTab ? morphArtRadius : collapsedArtSize * 0.5f;
 
             D2D1_RECT_F artDrawRect = artBaseRect;
             float artDrawRadius = artBaseRadius;
@@ -21058,7 +21171,8 @@ class Renderer {
     }
 
     void DrawClipboard(const SharedState& state, D2D1_RECT_F rect) {
-        if (rect.bottom - rect.top < 40.0f || rect.right - rect.left < 100.0f) return;
+        const float minH = BarNotchHeight(g_settings) > 0.0f ? 34.0f : 40.0f;
+        if (rect.bottom - rect.top < minH || rect.right - rect.left < 100.0f) return;
         const double now = NowSeconds();
         const float ttl = 2.5f;
         const float remaining = Clamp(static_cast<float>(state.clipboard.expiresAt - now), 0.0f, ttl);
@@ -21128,7 +21242,9 @@ class Renderer {
     }
 
     void DrawNotification(const SharedState& state, D2D1_RECT_F rect) {
-        if (rect.bottom - rect.top < 48.0f || rect.right - rect.left < 120.0f) return;
+        // Bar notch: the card is only as tall as the bar; its two lines need ~34px.
+        const float minH = BarNotchHeight(g_settings) > 0.0f ? 34.0f : 48.0f;
+        if (rect.bottom - rect.top < minH || rect.right - rect.left < 120.0f) return;
         const double now = NowSeconds();
         const float ttl = 4.0f;
         const float remaining = Clamp(static_cast<float>(state.notification.expiresAt - now), 0.0f, ttl);
@@ -22640,6 +22756,7 @@ class Renderer {
     float  lyricsFxMix_ = 1.0f;      // 0 while resizing, eases to 1 after; scales lyric effects
     double lyricsFxLast_ = -1.0;
     float settingsOpacity_ = 0.96f;
+    float barMerge_ = 0.0f;  // 1 while the pill rests merged with the top bar (BarNotchMerge)
     D2D1_COLOR_F pillBgColor_ = D2D1::ColorF(0.031f, 0.031f, 0.039f, 1.0f);
     // Design tokens for the current frame, rebuilt by EnsureBrushes.
     MaterialTokens material_{};
@@ -25573,9 +25690,13 @@ DWORD WINAPI RenderThreadProc(void*) {
                 const float clockSection = g_settings.mediaPillClock
                     ? renderer.MeasureMediaPill(snapshot, g_settings).sectionWidth
                     : 0.0f;
+                const float notchMediaWidth = renderer.MeasureNotchMediaWidth(snapshot, g_settings);
                 if (CollapsedLyricsActive(snapshot, g_settings)) {
                     // Collapsed but carrying lyrics: wider pill, same height.
                     primary.width = (kCollapsedLyricsWidth + clockSection) * g_settings.sizeScale;
+                } else if (notchMediaWidth > 0.0f) {
+                    // Bar notch: widens out of the time-only notch to [cover | time | visualiser].
+                    primary.width = notchMediaWidth * g_settings.sizeScale;
                 } else if (g_settings.mediaPillClock) {
                     primary.width = (MediaPillLayout::kBaseWidth + clockSection) * g_settings.sizeScale;
                 }
@@ -25594,6 +25715,22 @@ DWORD WINAPI RenderThreadProc(void*) {
                 primary.height = renderer.MeasureLookupCard(snapshot, lookupSettings) *
                                  lookupSettings.sizeScale;
             }
+        }
+
+        // Bar notch: every collapsed pill (resting time, media, alerts) is exactly
+        // as tall as the bar, so nothing collapsed ever hangs below it. Expanded
+        // views, the Quick Lookup / song recognition cards and the game overlay
+        // strip keep their own heights.
+        if (const float barNotchPx = BarNotchHeightPx(g_settings); barNotchPx > 0.0f) {
+            const float expandedPx = MediaLayout::kExpandedHeight * g_settings.sizeScale - 0.5f;
+            auto fitToBar = [&](Activity& a) {
+                if (a.width <= 0.0f || a.height <= 0.0f || a.height >= expandedPx) return;
+                if (a.kind == IslandKind::Lookup || a.kind == IslandKind::SongId) return;
+                if (a.kind == IslandKind::Idle && gameMetricsPresent) return;
+                a.height = barNotchPx;
+            };
+            fitToBar(primary);
+            if (secondary) fitToBar(*secondary);
         }
 
         if (stripActive && primary.width > 0.0f) {
@@ -25971,6 +26108,12 @@ DWORD WINAPI RenderThreadProc(void*) {
             } else if (renderSettings.themePreset == ThemePreset::Graphite && g_pillOpacityOverride.load() < 0) {
                 const bool isExpanded = isHoverExpanded || pinned || isTransientAlert || (widthSpring.value > 260.0f);
                 renderSettings.pillOpacity = isExpanded ? 0.98f : 0.88f;
+            }
+            if (!ctrlHoverCT) {
+                // Bar notch: fully opaque while merged with the bar (the window's
+                // alpha would otherwise let the desktop through the notch only).
+                const float merge = BarNotchMerge(renderSettings, heightSpring.value);
+                renderSettings.pillOpacity += (1.0f - renderSettings.pillOpacity) * merge;
             }
             // No usable backdrop (old Windows / effects off): keep the solid background.
             if (renderSettings.backdropMaterial != BackdropMaterial::None &&
