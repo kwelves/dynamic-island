@@ -240,6 +240,9 @@ We love community contributions! To ensure high-quality updates, please follow t
   - AutoHideFullscreen: true
     $name: Hide on full screen
     $description: Automatically hide the island when playing a video or app in full screen mode.
+  - ExpandOnHoverFullscreen: true
+    $name: Expand on hover in full screen
+    $description: While a full screen app hides the island, moving the cursor to the island's spot at the top still opens it fully, just like on the desktop. Off = it only shows the small collapsed pill there. Media never auto-expands on a track change in full screen either way.
   - UnhideOnHover: true
     $name: Unhide on hover
     $description: Allow the hidden island to reappear when you hover your mouse over it.
@@ -1311,6 +1314,7 @@ struct Settings {
     bool mediaTabLyrics = false;   // lyrics side panel in the expanded media tab
     int autoHideIdleSeconds = 0;
     bool autoHideFullscreen = true;
+    bool expandOnHoverFullscreen = true;  // Behavior.ExpandOnHoverFullscreen
     bool borderMergedMode = false;
     bool unhideOnHover = true;
     bool alwaysOnTop = true;
@@ -3633,6 +3637,7 @@ void LoadSettings() {
 
     next.borderMergedMode = Wh_GetIntSetting(L"Appearance.BorderMergedMode") != 0;
     next.autoHideFullscreen = Wh_GetIntSetting(L"Behavior.AutoHideFullscreen") != 0;
+    next.expandOnHoverFullscreen = Wh_GetIntSetting(L"Behavior.ExpandOnHoverFullscreen") != 0;
     next.hardwareMonitorModule = Wh_GetIntSetting(L"Modules.HardwareMonitorModule") != 0;
     const std::wstring borderModeStr = GetStringSettingCopy(L"Themes.ContourBorderMode");
     if (EqualsNoCase(borderModeStr, L"borderless")) {
@@ -4246,6 +4251,8 @@ HWND g_island = nullptr;
 bool g_classRegistered = false;
 bool g_registered = false;        // ABM_NEW succeeded and no ABM_REMOVE since
 bool g_fullscreenHidden = false;  // hidden while a fullscreen app owns our monitor
+bool g_shellFullscreen = false;   // ABN_FULLSCREENAPP, filtered to our monitor
+bool g_polledFullscreen = false;  // the island's own foreground check, ditto
 HMONITOR g_monitor = nullptr;
 RECT g_monitorRect = {};
 int g_heightPx = 0;
@@ -4406,19 +4413,36 @@ void UpdatePosition(bool force) {
            abd.rc.bottom);
 }
 
-void SetFullscreen(bool on) {
-    // ABN_FULLSCREENAPP is not per monitor; only react to our own monitor.
-    if (on) {
-        HWND fg = GetForegroundWindow();
-        if (!fg || MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST) != g_monitor) on = false;
-    }
-    if (on == g_fullscreenHidden) return;
-    g_fullscreenHidden = on;
-    if (on) {
+bool ForegroundOnOurMonitor() {
+    HWND fg = GetForegroundWindow();
+    return fg && MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST) == g_monitor;
+}
+
+// Hidden while either source says a fullscreen app covers our monitor.
+// ABN_FULLSCREENAPP alone is not enough: it is not per monitor, and Explorer does
+// not send it for every kind of fullscreen window, which left the bar sitting over
+// the top of a fullscreen video.
+void UpdateFullscreenVisibility() {
+    const bool hide = g_bar && (g_shellFullscreen || g_polledFullscreen);
+    if (hide == g_fullscreenHidden) return;
+    g_fullscreenHidden = hide;
+    if (hide) {
         ShowWindow(g_bar, SW_HIDE);
     } else {
         Restack();  // shows it again, right below the island
     }
+}
+
+void SetShellFullscreen(bool on) {
+    g_shellFullscreen = on && ForegroundOnOurMonitor();
+    UpdateFullscreenVisibility();
+}
+
+// Fed by the render loop's fullscreen check (IsForegroundFullscreen), every
+// 0.5s while the island runs and every 1.5s while it is parked for fullscreen.
+void SetPolledFullscreen(bool on) {
+    g_polledFullscreen = on && ForegroundOnOurMonitor();
+    UpdateFullscreenVisibility();
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -4462,7 +4486,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     UpdatePosition(false);
                     break;
                 case ABN_FULLSCREENAPP:
-                    SetFullscreen(lParam != 0);
+                    SetShellFullscreen(lParam != 0);
                     break;
             }
             return 0;
@@ -4542,6 +4566,8 @@ void Destroy() {
         g_classRegistered = false;
     }
     g_fullscreenHidden = false;
+    g_shellFullscreen = false;
+    g_polledFullscreen = false;
     g_monitor = nullptr;
     g_monitorRect = {};
     g_heightPx = 0;
@@ -25146,8 +25172,9 @@ DWORD WINAPI RenderThreadProc(void*) {
                 setHighResTimer(false);
                 if (parkedForFullscreen) {
                     MsgWaitForMultipleObjects(1, &g_stopEvent, FALSE, 1500, QS_ALLINPUT);
-                    const bool stillFullscreen =
-                        g_settings.autoHideFullscreen && IsForegroundFullscreen(hwnd);
+                    const bool rawFullscreen = IsForegroundFullscreen(hwnd);
+                    TopBar::SetPolledFullscreen(rawFullscreen);
+                    const bool stillFullscreen = g_settings.autoHideFullscreen && rawFullscreen;
                     g_isFullscreen.store(stillFullscreen, std::memory_order_relaxed);
                     if (!stillFullscreen) {
                         g_fullscreenOverrideVisible = false;
@@ -25330,6 +25357,23 @@ DWORD WINAPI RenderThreadProc(void*) {
                 hoverRect.top -= padY;
                 hoverRect.bottom += padY;
             }
+            // In full screen the island is woken from parking by the cursor entering
+            // the dock rect (LowLevelMouseProc), so the dock rect must keep counting
+            // as hover once the pill is back. Otherwise a cursor resting at the top
+            // edge, above or beside the small pill, wakes it, loses hover the next
+            // frame, parks it again and wakes it on the next move: the island
+            // flickers and never opens.
+            if (g_isFullscreen.load(std::memory_order_relaxed) && g_settings.unhideOnHover) {
+                const RECT dockRect = GetIslandDockRect();
+                UnionRect(&hoverRect, &hoverRect, &dockRect);
+            } else if (g_settings.topBarEnabled && !IsBottomPosition(g_settings.position)) {
+                // Top bar: the 2px between the screen edge and the pill count too,
+                // so a cursor pushed against the top edge still hovers the island.
+                RECT barRect = {};
+                if (TopBar::GetAnchorRect(&barRect)) {
+                    hoverRect.top = std::min(hoverRect.top, barRect.top);
+                }
+            }
             hover = PtInRect(&hoverRect, cursor) != FALSE;
         } else if (g_settings.unhideOnHover) {
             RECT dockRect = GetIslandDockRect();
@@ -25419,7 +25463,9 @@ DWORD WINAPI RenderThreadProc(void*) {
         static bool isFullscreen = false;
         static double lastFullscreenCheck = -1.0;  // -1.0 guarantees the very first iteration checks
         if (now - lastFullscreenCheck > 0.5) {
-            const bool newFullscreen = g_settings.autoHideFullscreen && IsForegroundFullscreen(hwnd);
+            const bool rawFullscreen = IsForegroundFullscreen(hwnd);
+            TopBar::SetPolledFullscreen(rawFullscreen);
+            const bool newFullscreen = g_settings.autoHideFullscreen && rawFullscreen;
             if (isFullscreen && !newFullscreen) {
                 // Fullscreen ended — re-arm so the next fullscreen session
                 // hides again even if the hotkey was used to reveal the
@@ -25460,8 +25506,11 @@ DWORD WINAPI RenderThreadProc(void*) {
         // change in those numbers is worth repainting for.
         const int metricTabIdx = NormalizedTabIndex(g_settings);
         const bool onHardwareMonitorTab = (metricTabIdx == HardwareMonitorTabIndex(g_settings));
+        // Hovering (or pinning) opens the island in full screen too, unless the user
+        // turned that off. Automatic expansion (track changes) stays desktop-only.
+        const bool userExpandAllowed = !isFullscreen || g_settings.expandOnHoverFullscreen;
         const bool hwMonitorVisible = (primary.kind == IslandKind::Idle || primary.kind == IslandKind::Media) &&
-            !isFullscreen && !gameMetricsPresent && (pinned || isHoverExpanded) && onHardwareMonitorTab;
+            userExpandAllowed && !gameMetricsPresent && (pinned || isHoverExpanded) && onHardwareMonitorTab;
         const bool gameOverlayVisible = gameMetricsPresent && !isFullscreen && !stripActive;
         const bool systemMetricsVisible = hwMonitorVisible || gameOverlayVisible;
 
@@ -25482,7 +25531,7 @@ DWORD WINAPI RenderThreadProc(void*) {
         }
 
         if (primary.kind == IslandKind::Idle) {
-            if (!isFullscreen && (pinned || isHoverExpanded)) {
+            if (userExpandAllowed && (pinned || isHoverExpanded)) {
                 primary.width = MediaLayout::kExpandedWidth * g_settings.sizeScale;
                 primary.height = MediaLayout::kExpandedHeight * g_settings.sizeScale;
             } else if (primary.width > 0.0f) {
@@ -25514,7 +25563,8 @@ DWORD WINAPI RenderThreadProc(void*) {
             primary.height = GameOverlayLayout::For(compact).height * g_settings.sizeScale;
         }
         if (primary.kind == IslandKind::Media) {
-            if (!isFullscreen && (isHoverExpanded || pinned || recentTrackChange)) {
+            if ((userExpandAllowed && (isHoverExpanded || pinned)) ||
+                (!isFullscreen && recentTrackChange)) {
                 primary.width = MediaLayout::kExpandedWidth * g_settings.sizeScale;
                 primary.height = MediaLayout::kExpandedHeight * g_settings.sizeScale;
                 // (Immersive lyrics: the island keeps its normal 380px width.)
