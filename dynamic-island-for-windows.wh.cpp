@@ -5681,6 +5681,9 @@ constexpr UINT kAppMenuClickMessage = WM_APP + 0x451;
 void AppMenuHover(POINT pt);
 void AppMenuClick(POINT pt, bool right);
 std::vector<HWND> MenuWindows(DWORD pid);
+void StartBarMenu(HWND icon, UINT uid);
+bool BarMenuIcon(HWND* icon, UINT* uid);
+void CloseProgramMenu();
 bool HasPanel(int item);
 int OpenItem();
 void Toggle(int item);
@@ -5760,43 +5763,6 @@ ItemAnim g_items[BarContent::kItemCount];
 ItemAnim g_trayItems[Tray::kMaxShown];  // by position in Metrics::trayBoxes
 int g_trayPress = -1;          // tray icon under a pressed button
 bool g_trayPressRight = false;
-// A bar tray icon whose program menu is open (right click): it gets the
-// bar-highlight plate, like an item with an open panel, until that menu is gone.
-struct TrayMenu {
-    HWND hwnd = nullptr;
-    UINT uid = 0;
-    DWORD pid = 0;
-    std::vector<HWND> before;  // the program's menu-like windows before the click
-    bool seen = false;
-    double start = 0.0;
-    double poll = 0.0;
-} g_trayMenu;
-
-bool TrayMenuActive() {
-    return g_trayMenu.hwnd != nullptr;
-}
-
-void EndTrayMenu() {
-    if (!g_trayMenu.hwnd) return;
-    g_trayMenu = TrayMenu{};
-    if (g_bar) InvalidateRect(g_bar, nullptr, FALSE);
-}
-
-// From Panels::Tick: the plate goes once the program's menu has shown and
-// closed again, or after 2 s if it never shows one.
-void PollTrayMenu(double now) {
-    if (!g_trayMenu.hwnd || now - g_trayMenu.poll < 0.1) return;
-    g_trayMenu.poll = now;
-    bool showing = false;
-    for (HWND hwnd : Panels::MenuWindows(g_trayMenu.pid)) {
-        if (std::find(g_trayMenu.before.begin(), g_trayMenu.before.end(), hwnd) == g_trayMenu.before.end()) showing = true;
-    }
-    if (showing) {
-        g_trayMenu.seen = true;
-    } else if (g_trayMenu.seen || now - g_trayMenu.start > 2.0) {
-        EndTrayMenu();
-    }
-}
 
 // Shell_NotifyIconGetRect for the bridge, about the icon's status box on the bar
 // (for an icon in the overflow menu, the chevron's): 1 asks for its top-left
@@ -5922,8 +5888,11 @@ void Paint() {
         float hlAlpha = 0.0f;
         Panels::Highlight(&hlItem, &hlAlpha);
         // The same plate under a bar tray icon whose program menu is open.
-        for (int t = 0; g_trayMenu.hwnd && g_metrics.valid && t < g_metrics.trayCount; ++t) {
-            if (g_metrics.trayHwnd[t] != g_trayMenu.hwnd || g_metrics.trayUid[t] != g_trayMenu.uid || g_trayItems[t].hidden) {
+        HWND menuIcon = nullptr;
+        UINT menuUid = 0;
+        const bool barMenu = Panels::BarMenuIcon(&menuIcon, &menuUid);
+        for (int t = 0; barMenu && g_metrics.valid && t < g_metrics.trayCount; ++t) {
+            if (g_metrics.trayHwnd[t] != menuIcon || g_metrics.trayUid[t] != menuUid || g_trayItems[t].hidden) {
                 continue;
             }
             ComPtr<ID2D1SolidColorBrush> plate;
@@ -6143,15 +6112,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                                                    static_cast<float>(GET_Y_LPARAM(lParam)));
             // A tray icon gets the button like in Explorer's tray: down now, up on release.
             if (const int t = TrayHit(pt.x); t >= 0) {
-                Panels::Close(true);
-                EndTrayMenu();
+                Panels::Close(true);  // also closes an open program menu
                 g_trayPress = t;
                 g_trayPressRight = msg == WM_RBUTTONDOWN;
                 Tray::Mouse(g_metrics.trayHwnd[t], g_metrics.trayUid[t], msg, TrayAnchor(t));
                 SetCapture(hwnd);
                 return 0;
             }
-            EndTrayMenu();
+            Panels::CloseProgramMenu();
             if (msg == WM_RBUTTONDOWN) return 0;
             auto hit = [&](BarContent::Item item) {
                 const D2D1_RECT_F& r = g_metrics.boxes[item];
@@ -6178,14 +6146,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (t >= 0 && t < g_metrics.trayCount && (msg == WM_RBUTTONUP) == g_trayPressRight &&
                 TrayHit(static_cast<float>(GET_X_LPARAM(lParam))) == t) {
                 if (msg == WM_RBUTTONUP) {  // its program menu: plate on the icon until it closes
-                    DWORD pid = 0;
-                    GetWindowThreadProcessId(g_metrics.trayHwnd[t], &pid);
-                    g_trayMenu = TrayMenu{};
-                    g_trayMenu.hwnd = g_metrics.trayHwnd[t];
-                    g_trayMenu.uid = g_metrics.trayUid[t];
-                    g_trayMenu.pid = pid;
-                    g_trayMenu.before = Panels::MenuWindows(pid);
-                    g_trayMenu.start = g_trayMenu.poll = NowSeconds();
+                    Panels::StartBarMenu(g_metrics.trayHwnd[t], g_metrics.trayUid[t]);
                     InvalidateRect(hwnd, nullptr, FALSE);
                 }
                 Tray::Mouse(g_metrics.trayHwnd[t], g_metrics.trayUid[t], msg, TrayAnchor(t));
@@ -7077,6 +7038,13 @@ LRESULT CALLBACK MouseHookProc(int code, WPARAM wParam, LPARAM lParam) {
 // While a panel is open the keyboard belongs to it, as with a macOS menu:
 // Esc closes, ← / → move to the neighbouring item. Other keys pass through.
 LRESULT CALLBACK KeyHookProc(int code, WPARAM wParam, LPARAM lParam) {
+    // A program's menu is open: its keys pass through; Esc also closes it from
+    // here, as Windows may not have made that menu active (then it would miss it).
+    if (code == HC_ACTION && g_hooksWanted.load(std::memory_order_relaxed) &&
+        g_appMenuPid.load(std::memory_order_relaxed) && (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) &&
+        reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam)->vkCode == VK_ESCAPE) {
+        if (HWND h = BarStatus::g_notifyHwnd.load()) PostMessageW(h, kCloseMessage, 0, 0);
+    }
     if (code == HC_ACTION && g_hooksWanted.load(std::memory_order_relaxed) &&
         !g_appMenuPid.load(std::memory_order_relaxed) &&  // a program's menu is open: its keys
         reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam)->dwExtraInfo != kOwnKey &&
@@ -7272,6 +7240,9 @@ struct State {
     int calYear = 0;
     int calMonth = 0;
     int appMenuRow = -1;           // overflow menu: the row whose program's own menu is open
+    bool appMenuOnBar = false;     // ... or a bar tray icon's (no panel needed)
+    HWND appMenuIcon = nullptr;    // the tray icon whose program menu is open
+    UINT appMenuUid = 0;
     bool appMenuSeen = false;      // that menu has appeared
     double appMenuStart = 0.0;
     double appMenuPoll = 0.0;
@@ -7515,25 +7486,84 @@ std::vector<HWND> MenuWindows(DWORD pid) {
     return search.windows;
 }
 
-// The program's menu opened from the overflow menu is showing (a window that
-// was not there before the click).
-bool AppMenuShowing() {
+// The program menu's windows: menu-like windows of its process that were not
+// there before the click.
+std::vector<HWND> AppMenuWindows() {
+    std::vector<HWND> out;
     for (HWND hwnd : MenuWindows(g_appMenuPid.load())) {
-        if (std::find(g.appMenuBefore.begin(), g.appMenuBefore.end(), hwnd) == g.appMenuBefore.end()) return true;
+        if (std::find(g.appMenuBefore.begin(), g.appMenuBefore.end(), hwnd) == g.appMenuBefore.end()) out.push_back(hwnd);
     }
-    return false;
+    return out;
 }
+
+bool AppMenuShowing() {
+    return !AppMenuWindows().empty();
+}
+
+void SetHooks(bool on);
 
 void EndAppMenu() {
     if (g.appMenuRow < 0 && !g_appMenuPid.load()) return;
+    const bool onBar = g.appMenuOnBar;
     g_appMenuPid.store(0);
     g.appMenuRow = -1;
+    g.appMenuOnBar = false;
+    g.appMenuIcon = nullptr;
+    g.appMenuUid = 0;
     g.appMenuBefore.clear();
     g.dirty = true;
+    if (onBar) {
+        if (!g.open) SetHooks(false);  // the hooks were only for that menu
+        if (TopBar::g_bar) InvalidateRect(TopBar::g_bar, nullptr, FALSE);  // its plate goes
+    }
+}
+
+// Ends the program-menu mode and closes that menu if it is still showing. It is
+// told directly (Esc posted to its windows, WM_CANCELMODE to its owner) rather
+// than through the keyboard: Windows does not always make such a menu active.
+void CloseAppMenu() {
+    if (g.appMenuRow < 0 && !g_appMenuPid.load()) return;
+    const std::vector<HWND> menus = AppMenuWindows();
+    const HWND owner = g.appMenuIcon;
+    EndAppMenu();
+    for (auto it = menus.rbegin(); it != menus.rend(); ++it) {  // innermost first
+        PostMessageW(*it, WM_KEYDOWN, VK_ESCAPE, 0x00010001);
+        PostMessageW(*it, WM_KEYUP, VK_ESCAPE, 0xC0010001);
+    }
+    if (!menus.empty() && owner) SendNotifyMessageW(owner, WM_CANCELMODE, 0, 0);
+}
+
+void CloseProgramMenu() {
+    CloseAppMenu();
+}
+
+bool BarMenuIcon(HWND* icon, UINT* uid) {
+    if (!g.appMenuOnBar || !g_appMenuPid.load()) return false;
+    *icon = g.appMenuIcon;
+    *uid = g.appMenuUid;
+    return true;
+}
+
+// A bar tray icon's program menu (right click): the icon gets the bar-highlight
+// plate, and the input hooks run while it is open so a click elsewhere, Esc or
+// another item closes it, even if Windows did not make that menu active.
+void StartBarMenu(HWND icon, UINT uid) {
+    CloseAppMenu();
+    DWORD pid = 0;
+    GetWindowThreadProcessId(icon, &pid);
+    if (!pid) return;
+    g.appMenuOnBar = true;
+    g.appMenuIcon = icon;
+    g.appMenuUid = uid;
+    g.appMenuBefore = MenuWindows(pid);
+    g.appMenuSeen = false;
+    g.appMenuStart = g.appMenuPoll = NowSeconds();
+    g_appMenuPid.store(pid);
+    SetHooks(true);
 }
 
 void BuildRows() {
-    EndAppMenu();
+    CloseAppMenu();  // another panel or menu: a program menu from the old one closes
     g.rows.clear();
     g_iconBitmaps.clear();  // keyed by pixel address: never reuse one for new rows
     g.menu = IsMenu(g.item);
@@ -8412,7 +8442,7 @@ void CancelPending() {
 
 void Close(bool animate) {
     CancelPending();
-    EndAppMenu();
+    CloseAppMenu();
     if (!g.open) return;
     g.open = false;
     g_menuKeys = false;
@@ -8646,6 +8676,8 @@ void StartAppMenu(int i) {
     DWORD pid = 0;
     GetWindowThreadProcessId(row.trayHwnd, &pid);
     g.appMenuRow = i;
+    g.appMenuIcon = row.trayHwnd;
+    g.appMenuUid = row.trayUid;
     g.hover = i;
     g.press = -1;
     g.appMenuBefore = MenuWindows(pid);
@@ -8683,32 +8715,17 @@ void AppMenuHover(POINT pt) {
     }
 }
 
-// Ends the program-menu mode and closes that menu if it is still showing (Esc,
-// marked as ours so the keyboard hook lets it through).
-void CloseAppMenu() {
-    const bool showing = g.appMenuRow >= 0 && AppMenuShowing();
-    EndAppMenu();
-    if (showing) {
-        INPUT keys[2] = {};
-        keys[0].type = keys[1].type = INPUT_KEYBOARD;
-        keys[0].ki.wVk = keys[1].ki.wVk = VK_ESCAPE;
-        keys[0].ki.dwExtraInfo = keys[1].ki.dwExtraInfo = kOwnKey;
-        keys[1].ki.dwFlags = KEYEVENTF_KEYUP;
-        SendInput(2, keys, sizeof(INPUT));
-    }
-}
-
 // A click on our list or the bar while a program's menu is open: that menu
 // closes and the click acts at once (a row, or whatever is on the bar there).
 void AppMenuClick(POINT pt, bool right) {
-    if (!g.open || g.appMenuRow < 0) return;
+    if (!g_appMenuPid.load()) return;
     RECT bar = {};
     if (TopBar::GetAnchorRect(&bar) && PtInRect(&bar, pt)) {
         CloseAppMenu();
         TopBar::ClickAt(pt, right);
         return;
     }
-    const int row = RowAtScreen(pt);
+    const int row = g.open ? RowAtScreen(pt) : -1;
     CloseAppMenu();
     if (row < 0 || g.rows[row].action != kTrayIcon) return;
     if (right) {
@@ -8936,7 +8953,7 @@ void OnIslandExpanded() {
 }
 
 bool Animating() {
-    return g.pendingItem >= 0 || g.appMenuRow >= 0 || TopBar::TrayMenuActive() || g.closing || g.hlOffStart >= 0.0 || g.trackStart >= 0.0 ||
+    return g.pendingItem >= 0 || g_appMenuPid.load() || g.closing || g.hlOffStart >= 0.0 || g.trackStart >= 0.0 ||
            (g.open && (g.openSpring.value != g.openSpring.target || g.fadeSpring.value != g.fadeSpring.target ||
                        g.knob.value != g.knob.target || g.slider.value != g.slider.target || g.dirty));
 }
@@ -8947,17 +8964,17 @@ void Tick() {
     const double now = NowSeconds();
     const float dt = g.lastTick < 0.0 ? 0.0f : Clamp(static_cast<float>(now - g.lastTick), 0.0f, 0.05f);
     g.lastTick = now;
-    TopBar::PollTrayMenu(now);
-    // A program's own menu from the overflow menu: once it has appeared and is
-    // gone again (an item chosen, a click elsewhere, Esc), the overflow menu
-    // closes too; a program that shows no menu within 2 s just ends the mode.
-    if (g.open && g.appMenuRow >= 0 && now - g.appMenuPoll >= 0.1) {
+    // A program's own menu (overflow row or bar icon): once it has appeared and
+    // is gone again (an item chosen, a click elsewhere, Esc) the mode ends, and
+    // the overflow menu closes too; a program that shows no menu within 2 s just
+    // ends the mode.
+    if (g_appMenuPid.load() && now - g.appMenuPoll >= 0.1) {
         g.appMenuPoll = now;
         if (AppMenuShowing()) {
             g.appMenuSeen = true;
-        } else if (g.appMenuSeen) {
+        } else if (g.appMenuSeen && g.appMenuRow >= 0) {
             Close(true);
-        } else if (now - g.appMenuStart > 2.0) {
+        } else if (g.appMenuSeen || now - g.appMenuStart > 2.0) {
             EndAppMenu();
         }
     }
