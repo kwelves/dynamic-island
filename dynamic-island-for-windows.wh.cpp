@@ -4746,6 +4746,7 @@ struct Model {
     bool charging = false;  // on AC power
     std::wstring layout;    // "RU", "EN", ...
     std::wstring date;      // "Пт 6 нояб."
+    int traySettings = 0;   // bumps when NotifyIconSettings (Windows' tray choices) changes
     bool operator==(const Model&) const = default;
 };
 
@@ -5057,6 +5058,19 @@ DWORD WINAPI ThreadProc(void*) {
         winrt::Windows::Devices::Radios::Radio btRadio{nullptr};
         double lastSecond = -1e9, lastSlow = -1e9, lastEndpoint = -1e9, lastRadioLookup = -1e9;
         HWND lastForeground = nullptr;
+        // Windows' "Other system tray icons" choices (IsPromoted under HKCU
+        // "Control Panel\NotifyIconSettings"), read-only: a change bumps
+        // model.traySettings and the bar re-reads them (Tray::LoadSettings).
+        HKEY trayKey = nullptr;
+        HANDLE trayEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+        RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\\NotifyIconSettings", 0, KEY_NOTIFY, &trayKey);
+        auto armTray = [&] {
+            if (trayKey && trayEvent) {
+                RegNotifyChangeKeyValue(trayKey, TRUE, REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET, trayEvent,
+                                        TRUE);
+            }
+        };
+        armTray();
 
         for (;;) {
             bool enabled = false;
@@ -5075,6 +5089,10 @@ DWORD WINAPI ThreadProc(void*) {
             }
             if (!enabled) continue;
             const double now = NowSeconds();
+            if (trayEvent && WaitForSingleObject(trayEvent, 0) == WAIT_OBJECT_0) {
+                ++model.traySettings;
+                armTray();
+            }
 
             // Foreground app and its keyboard layout.
             HWND fg = GetForegroundWindow();
@@ -5155,6 +5173,8 @@ DWORD WINAPI ThreadProc(void*) {
             Publish(model);
         }
         if (hook) UnhookWinEvent(hook);
+        if (trayKey) RegCloseKey(trayKey);
+        if (trayEvent) CloseHandle(trayEvent);
     }
     winrt::uninit_apartment();
     return 0;
@@ -5174,6 +5194,7 @@ constexpr ULONG_PTR kCopyDataId = 0x52544944;  // 'DITR'
 constexpr uint32_t kMagic = 0x31544944;        // 'DIT1'
 constexpr uint32_t kHello = 0xFFFFFFFF;        // the bridge (re)started
 constexpr uint32_t kQuery = 0xFFFFFFFE;        // diagnostics: the reply packs the counters below
+constexpr uint32_t kDump = 0xFFFFFFFD;         // diagnostics: write the icon list to %TEMP%
 constexpr uint32_t kMaxIconPx = 64;
 constexpr int kMaxShown = 32;
 
@@ -5209,10 +5230,26 @@ struct Icon {
     uint32_t w = 0, h = 0;
     std::vector<uint32_t> pixels;
     ComPtr<ID2D1Bitmap> bitmap;  // on the bar's render target
+    std::wstring path;           // the owner's executable
+    bool system = false;         // Windows' own volume / network / power icon
+};
+
+// Windows' choices from "Settings > Personalization > Taskbar > Other system
+// tray icons": one entry per icon Windows has seen (read-only).
+struct Setting {
+    std::wstring path;
+    DWORD uid = 0;
+    bool hasUid = false;
+    bool promoted = false;
 };
 
 std::vector<Icon> g_icons;  // in the order they were added
 bool g_selfBroadcast = false;
+std::vector<Setting> g_settings;
+int g_settingsGen = -1;
+// Icons for the overflow menu (not shown on the bar), by owner window + id;
+// filled by the bar layout (BarContent::Paint), read by Panels.
+std::vector<std::pair<HWND, UINT>> g_overflow;
 // Diagnostics for kQuery (tests send it; the bridge never does).
 int g_lastShown = 0;       // icons laid out by the last bar paint
 int g_bitmapFailures = 0;  // CreateBitmap failures
@@ -5235,6 +5272,209 @@ bool HasGuid(const GUID& g) {
     return memcmp(&g, &zero, sizeof(GUID)) != 0;
 }
 
+std::wstring ProcessPath(HWND hwnd) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    std::wstring out;
+    if (HANDLE h = pid ? OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid) : nullptr) {
+        wchar_t path[MAX_PATH * 2] = {};
+        DWORD n = ARRAYSIZE(path);
+        if (QueryFullProcessImageNameW(h, 0, path, &n)) out.assign(path, n);
+        CloseHandle(h);
+    }
+    return out;
+}
+
+// Explorer's legacy volume / network / power icons (7820AE73/74/75-23E3-4229-
+// 82C1-E41CB67D5B9C, as in ManagedShell). Windows 11 draws its own and so does
+// the bar, so they are never shown.
+bool IsSystemIcon(const Icon& icon) {
+    if (!icon.hasGuid) return false;
+    static const GUID volume = {0x7820AE73, 0x23E3, 0x4229, {0x82, 0xC1, 0xE4, 0x1C, 0xB6, 0x7D, 0x5B, 0x9C}};
+    GUID g = icon.guid;
+    const unsigned long d1 = g.Data1;
+    g.Data1 = volume.Data1;
+    return memcmp(&g, &volume, sizeof(GUID)) == 0 && d1 >= 0x7820AE73 && d1 <= 0x7820AE75;
+}
+
+// "{FOLDERID}\rest" (how NotifyIconSettings stores paths) -> a full path.
+std::wstring ExpandKnownFolder(const std::wstring& p) {
+    if (p.size() < 39 || p[0] != L'{' || p[37] != L'}') return p;
+    GUID id;
+    if (FAILED(CLSIDFromString(p.substr(0, 38).c_str(), &id))) return p;
+    PWSTR folder = nullptr;
+    std::wstring out = p;
+    if (SUCCEEDED(SHGetKnownFolderPath(id, 0, nullptr, &folder)) && folder) {
+        out = std::wstring(folder) + p.substr(38);
+    } else {
+        // Windhawk runs this tool mod as a 32-bit process, where the 64-bit
+        // Program Files folders are not available as known folders.
+        static const GUID programFilesX64 = {0x6D809377, 0x6AF0, 0x444B, {0x89, 0x57, 0xA3, 0x77, 0x3F, 0x02, 0x20, 0x0E}};
+        static const GUID commonFilesX64 = {0x6365D5A7, 0x0F0D, 0x45E5, {0x87, 0xF6, 0x0D, 0xA5, 0x6B, 0x6A, 0x4F, 0x7D}};
+        const wchar_t* variable = IsEqualGUID(id, programFilesX64) ? L"ProgramW6432"
+                                  : IsEqualGUID(id, commonFilesX64) ? L"CommonProgramW6432"
+                                                                    : nullptr;
+        wchar_t value[MAX_PATH] = {};
+        if (variable && GetEnvironmentVariableW(variable, value, ARRAYSIZE(value))) out = value + p.substr(38);
+    }
+    CoTaskMemFree(folder);
+    return out;
+}
+
+void LoadSettings(int generation) {
+    if (generation == g_settingsGen) return;
+    g_settingsGen = generation;
+    g_settings.clear();
+    HKEY root = nullptr;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\\NotifyIconSettings", 0, KEY_READ, &root) != ERROR_SUCCESS) {
+        return;
+    }
+    for (DWORD i = 0;; ++i) {
+        wchar_t name[256];
+        DWORD n = ARRAYSIZE(name);
+        if (RegEnumKeyExW(root, i, name, &n, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
+        wchar_t path[MAX_PATH * 2] = {};
+        DWORD bytes = sizeof(path);
+        if (RegGetValueW(root, name, L"ExecutablePath", RRF_RT_REG_SZ, nullptr, path, &bytes) != ERROR_SUCCESS) continue;
+        Setting setting;
+        setting.path = ExpandKnownFolder(path);
+        DWORD value = 0;
+        bytes = sizeof(value);
+        if (RegGetValueW(root, name, L"UID", RRF_RT_REG_DWORD, nullptr, &value, &bytes) == ERROR_SUCCESS) {
+            setting.uid = value;
+            setting.hasUid = true;
+        }
+        value = 0;
+        bytes = sizeof(value);
+        setting.promoted = RegGetValueW(root, name, L"IsPromoted", RRF_RT_REG_DWORD, nullptr, &value, &bytes) ==
+                               ERROR_SUCCESS &&
+                           value != 0;
+        g_settings.push_back(std::move(setting));
+    }
+    RegCloseKey(root);
+}
+
+// "Show on the taskbar" in Windows; an icon Windows has no entry for is not.
+bool Promoted(const Icon& icon) {
+    const Setting* first = nullptr;
+    for (const Setting& setting : g_settings) {
+        if (_wcsicmp(setting.path.c_str(), icon.path.c_str()) != 0) continue;
+        if (!icon.hasGuid && setting.hasUid && setting.uid == icon.uid) return setting.promoted;
+        if (!first) first = &setting;
+    }
+    return first && first->promoted;
+}
+
+// Icons the bar can show at all: the program has not hidden it, it is not
+// Windows' own and it has a picture.
+bool Usable(const Icon& icon) {
+    return !icon.hidden && !icon.system && !icon.pixels.empty();
+}
+
+Icon* Find(HWND hwnd, UINT uid) {
+    for (Icon& icon : g_icons) {
+        if (icon.hwnd == hwnd && icon.uid == uid) return &icon;
+    }
+    return nullptr;
+}
+
+// The tooltip's first line, or the program's file name.
+std::wstring Title(const Icon& icon) {
+    std::wstring t = icon.tip.substr(0, icon.tip.find_first_of(L"\r\n"));
+    while (!t.empty() && iswspace(t.back())) t.pop_back();
+    if (!t.empty()) return t;
+    std::wstring name = icon.path.substr(icon.path.find_last_of(L"\\/") + 1);
+    if (name.size() > 4 && _wcsicmp(name.c_str() + name.size() - 4, L".exe") == 0) name.resize(name.size() - 4);
+    return name;
+}
+
+BitmapPixels Pixels(const Icon& icon) {
+    BitmapPixels out;
+    out.width = icon.w;
+    out.height = icon.h;
+    out.bgra.resize(icon.pixels.size() * 4);
+    memcpy(out.bgra.data(), icon.pixels.data(), out.bgra.size());
+    return out;
+}
+
+// One mouse event in the form the program asked for (NOTIFYICON_VERSION_4:
+// wParam = anchor point, lParam = event | id << 16; older: wParam = id).
+void Send(const Icon& icon, UINT event, POINT pt) {
+    if (!icon.callbackMessage || !IsWindow(icon.hwnd)) return;
+    const bool v4 = icon.version >= 4;
+    const WPARAM w = v4 ? MAKEWPARAM(pt.x, pt.y) : icon.uid;
+    const LPARAM l = v4 ? MAKELPARAM(event, icon.uid) : event;
+    SendNotifyMessageW(icon.hwnd, icon.callbackMessage, w, l);
+}
+
+// Half of a click, as Explorer sends it: down (after a move), or up followed by
+// NIN_SELECT / WM_CONTEXTMENU for version 3+. The program may bring its window
+// or menu to the front: the bar just got the click, so it can allow that.
+void Mouse(HWND hwnd, UINT uid, UINT event) {
+    Icon* icon = Find(hwnd, uid);
+    if (!icon) return;
+    POINT pt = {};
+    GetCursorPos(&pt);
+    DWORD pid = 0;
+    GetWindowThreadProcessId(icon->hwnd, &pid);
+    if (pid) AllowSetForegroundWindow(pid);
+    switch (event) {
+        case WM_LBUTTONDOWN:
+        case WM_LBUTTONDBLCLK:
+        case WM_RBUTTONDOWN:
+            Send(*icon, WM_MOUSEMOVE, pt);
+            Send(*icon, event, pt);
+            break;
+        case WM_LBUTTONUP:
+            Send(*icon, WM_LBUTTONUP, pt);
+            if (icon->version >= 3) Send(*icon, NIN_SELECT, pt);
+            break;
+        case WM_RBUTTONUP:
+            Send(*icon, WM_RBUTTONUP, pt);
+            if (icon->version >= 3) Send(*icon, WM_CONTEXTMENU, pt);
+            break;
+    }
+}
+
+void Click(HWND hwnd, UINT uid, bool right) {
+    Mouse(hwnd, uid, right ? WM_RBUTTONDOWN : WM_LBUTTONDOWN);
+    Mouse(hwnd, uid, right ? WM_RBUTTONUP : WM_LBUTTONUP);
+}
+
+// kDump: %TEMP%\dynamic-island-tray.txt, one line per icon (tests only).
+void DumpIcons() {
+    std::wstring text;
+    for (size_t i = 0; i < g_icons.size(); ++i) {
+        const Icon& icon = g_icons[i];
+        wchar_t guid[40] = L"-";
+        if (icon.hasGuid) StringFromGUID2(icon.guid, guid, ARRAYSIZE(guid));
+        DWORD pid = 0;
+        GetWindowThreadProcessId(icon.hwnd, &pid);
+        wchar_t line[256];
+        swprintf(line, ARRAYSIZE(line), L"%u\tpid=%lu\tuid=%u\tver=%u\tcb=0x%X\t%ux%u\thidden=%d system=%d promoted=%d\t%ls\t",
+                 static_cast<unsigned>(i), pid, icon.uid, icon.version, icon.callbackMessage, icon.w, icon.h, icon.hidden ? 1 : 0,
+                 icon.system ? 1 : 0, Promoted(icon) ? 1 : 0, guid);
+        text += line;
+        text += icon.path + L"\t" + Title(icon) + L"\r\n";
+    }
+    wchar_t dir[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, dir);
+    const std::wstring file = std::wstring(dir) + L"dynamic-island-tray.txt";
+    const int bytes = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), nullptr, 0,
+                                          nullptr, nullptr);
+    std::string utf8(static_cast<size_t>(std::max(0, bytes)), '\0');
+    if (bytes > 0) {
+        WideCharToMultiByte(CP_UTF8, 0, text.c_str(), static_cast<int>(text.size()), utf8.data(), bytes, nullptr,
+                            nullptr);
+    }
+    HANDLE h = CreateFileW(file.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(h, utf8.data(), static_cast<DWORD>(utf8.size()), &written, nullptr);
+        CloseHandle(h);
+    }
+}
+
 // Icons of programs that exited without removing them (Explorer drops those
 // when the mouse passes over them).
 void Prune() {
@@ -5255,6 +5495,10 @@ LRESULT OnCopyData(const COPYDATASTRUCT* cds) {
         auto cap = [](size_t v) { return static_cast<LRESULT>(std::min<size_t>(v, 255)); };
         return 1 | cap(g_icons.size()) << 8 | cap(static_cast<size_t>(g_lastShown)) << 16 |
                cap(static_cast<size_t>(g_bitmapFailures)) << 24;
+    }
+    if (p.message == kDump) {
+        DumpIcons();
+        return 1;
     }
     if (p.message == kHello) {
         RequestIcons();
@@ -5281,11 +5525,13 @@ LRESULT OnCopyData(const COPYDATASTRUCT* cds) {
         it = g_icons.end() - 1;
         it->hwnd = hwnd;
         it->uid = p.uid;
+        it->path = ProcessPath(hwnd);
     }
     Icon& icon = *it;
     if (byGuid) {
         icon.guid = p.guid;
         icon.hasGuid = true;
+        icon.system = IsSystemIcon(icon);
     }
     if (p.flags & NIF_MESSAGE) icon.callbackMessage = p.callbackMessage;
     if (p.flags & NIF_TIP) {
@@ -5308,7 +5554,7 @@ LRESULT OnCopyData(const COPYDATASTRUCT* cds) {
 
 // Paints the bar's side content (defined further down, after the weather helpers).
 namespace BarContent {
-enum Item { kLogo, kApp, kWeather, kBluetooth, kNetwork, kVolume, kBattery, kLayout, kDate, kItemCount };
+enum Item { kLogo, kApp, kWeather, kTrayMore, kBluetooth, kNetwork, kVolume, kBattery, kLayout, kDate, kItemCount };
 inline bool IsLeft(int item) { return item <= kWeather; }
 // Per-item hide animation (motion.md "Разъезд бокового контента бара").
 struct ItemVisual {
@@ -5420,6 +5666,17 @@ struct ItemAnim {
 };
 ItemAnim g_items[BarContent::kItemCount];
 ItemAnim g_trayItems[Tray::kMaxShown];  // by position in Metrics::trayBoxes
+int g_trayPress = -1;          // tray icon under a pressed button
+bool g_trayPressRight = false;
+
+// The tray icon under client x, or -1. An icon hidden by the island takes no clicks.
+int TrayHit(float x) {
+    for (int i = 0; i < g_metrics.trayCount; ++i) {
+        const D2D1_RECT_F& r = g_metrics.trayBoxes[i];
+        if (!g_trayItems[i].hidden && x >= r.left && x < r.right) return i;
+    }
+    return -1;
+}
 
 // The bar's screen rect as the shell granted it. Strict leaf lock.
 std::mutex g_anchorMutex;
@@ -5673,11 +5930,23 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             return 0;
         }
+        case WM_RBUTTONDOWN:
+        case WM_LBUTTONDBLCLK:
         case WM_LBUTTONDOWN: {
             // Pressing acts, like macOS; the whole full-height box is the target, and
             // an item hidden by the island is not (components.md "Hit-test").
             const D2D1_POINT_2F pt = D2D1::Point2F(static_cast<float>(GET_X_LPARAM(lParam)),
                                                    static_cast<float>(GET_Y_LPARAM(lParam)));
+            // A tray icon gets the button like in Explorer's tray: down now, up on release.
+            if (const int t = TrayHit(pt.x); t >= 0) {
+                Panels::Close(true);
+                g_trayPress = t;
+                g_trayPressRight = msg == WM_RBUTTONDOWN;
+                Tray::Mouse(g_metrics.trayHwnd[t], g_metrics.trayUid[t], msg);
+                SetCapture(hwnd);
+                return 0;
+            }
+            if (msg == WM_RBUTTONDOWN) return 0;
             auto hit = [&](BarContent::Item item) {
                 const D2D1_RECT_F& r = g_metrics.boxes[item];
                 return g_metrics.present[item] && !g_items[item].hidden && pt.x >= r.left && pt.x < r.right;
@@ -5693,6 +5962,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
             Panels::Close(true);
+            return 0;
+        }
+        case WM_LBUTTONUP:
+        case WM_RBUTTONUP: {
+            const int t = g_trayPress;
+            g_trayPress = -1;
+            if (GetCapture() == hwnd) ReleaseCapture();
+            if (t >= 0 && t < g_metrics.trayCount && (msg == WM_RBUTTONUP) == g_trayPressRight &&
+                TrayHit(static_cast<float>(GET_X_LPARAM(lParam))) == t) {
+                Tray::Mouse(g_metrics.trayHwnd[t], g_metrics.trayUid[t], msg);
+            }
             return 0;
         }
         case WM_DPICHANGED:
@@ -5723,6 +6003,7 @@ bool Create() {
         wc.lpfnWndProc = WndProc;
         wc.hInstance = inst;
         wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.style = CS_DBLCLKS;  // tray icons get double clicks; other items treat one like a press
         wc.lpszClassName = kClassName;
         if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
             Wh_Log(L"Top bar: RegisterClassExW failed (%lu).", GetLastError());
@@ -6640,7 +6921,8 @@ enum Action {
     kConnectWifi, kOpenWifiSettings, kOpenBatterySettings,
     // menus
     kAbout, kWindowsSettings, kStore, kTaskManager, kSleep, kPowerDialog, kLock,
-    kSelectLayout, kOnScreenKeyboard, kKeyboardSettings, kOpenForecast
+    kSelectLayout, kOnScreenKeyboard, kKeyboardSettings, kOpenForecast,
+    kTrayIcon
 };
 
 struct Row {
@@ -6661,6 +6943,8 @@ struct Row {
     bool toggle = false;  // header with a switch
     int action = kNoAction;
     int week = 0;         // CalWeek: 0-based week of the grid
+    HWND trayHwnd = nullptr;  // kTrayIcon: the tray icon (owner window + id)
+    UINT trayUid = 0;
     float y = 0.0f;
     float h = 0.0f;
 };
@@ -6744,7 +7028,8 @@ State g;
 // components.md: Control Center panels for Wi-Fi, Bluetooth, Sound, Battery (and
 // the calendar); NSMenu-style menus for the logo, the weather and the layout.
 bool IsMenu(int item) {
-    return item == BarContent::kLogo || item == BarContent::kWeather || item == BarContent::kLayout;
+    return item == BarContent::kLogo || item == BarContent::kWeather || item == BarContent::kLayout ||
+           item == BarContent::kTrayMore;
 }
 
 bool HasPanel(int item) {
@@ -6892,6 +7177,18 @@ void BuildMenu() {
         Row open = MenuRow(Loc(L"Open Forecast\u2026"), kOpenForecast);
         open.arg = w.city;
         g.rows.push_back(std::move(open));
+    } else if (g.item == BarContent::kTrayMore) {
+        // Tray icons not shown on the bar: the program's icon and its tooltip.
+        // Left click opens it, right click its own menu (WndProc WM_RBUTTONUP).
+        for (const auto& [hwnd, uid] : Tray::g_overflow) {
+            const Tray::Icon* icon = Tray::Find(hwnd, uid);
+            if (!icon) continue;
+            Row r = MenuRow(Tray::Title(*icon), kTrayIcon);
+            r.trayHwnd = hwnd;
+            r.trayUid = uid;
+            r.icon = PixelsRef(Tray::Pixels(*icon));
+            g.rows.push_back(std::move(r));
+        }
     } else if (g.item == BarContent::kLayout) {
         // prototype "layout": the layouts as radio items, then the keyboard links.
         const HKL current = ForegroundLayout();
@@ -6911,7 +7208,7 @@ void BuildMenu() {
     for (const Row& r : g.rows) {
         if (r.kind != RowKind::MenuItem) continue;
         ComPtr<IDWriteTextLayout> t = DesignType::Layout(r.title, Text::PanelRow, 1.0f, 1000.0f, Design::kMenuRowH);
-        titleW = std::max(titleW, DesignType::Width(t.Get()));
+        titleW = std::max(titleW, DesignType::Width(t.Get()) + (r.icon ? Design::kBarIcon + Design::kTextIconGap : 0.0f));
         if (!r.value.empty()) {
             ComPtr<IDWriteTextLayout> k = DesignType::Layout(r.value, Text::PanelRow, 1.0f, 1000.0f, Design::kMenuRowH);
             keyW = std::max(keyW, DesignType::Width(k.Get()));
@@ -6923,6 +7220,7 @@ void BuildMenu() {
 
 void BuildRows() {
     g.rows.clear();
+    g_iconBitmaps.clear();  // keyed by pixel address: never reuse one for new rows
     g.menu = IsMenu(g.item);
     g.width = Design::kPanelW;
     g.radius = g.menu ? Design::kRadiusMenu : Design::kRadiusPanel;
@@ -7435,6 +7733,22 @@ void DrawShadow(D2D1_RECT_F body) {
     }
 }
 
+// The D2D bitmap for an icon row (cached until the rows are rebuilt).
+ID2D1Bitmap* IconBitmap(const PixelsRef& pixels) {
+    for (auto& [key, bitmap] : g_iconBitmaps) {
+        if (key == &*pixels) return bitmap.Get();
+    }
+    ComPtr<ID2D1Bitmap> bitmap;
+    const D2D1_BITMAP_PROPERTIES props =
+        D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    if (FAILED(g_rt->CreateBitmap(D2D1::SizeU(pixels->width, pixels->height), pixels->bgra.data(), pixels->width * 4,
+                                  &props, bitmap.GetAddressOf()))) {
+        return nullptr;
+    }
+    g_iconBitmaps.emplace_back(&*pixels, std::move(bitmap));
+    return g_iconBitmaps.back().second.Get();
+}
+
 void DrawRow(int index, const D2D1_MATRIX_3X2_F& base) {
     const Row& r = g.rows[index];
     const float W = g.width;
@@ -7611,7 +7925,16 @@ void DrawRow(int index, const D2D1_MATRIX_3X2_F& base) {
                           D2D1::RectF(Design::kMenuRowInset, r.y, Design::kMenuTextX, r.y + r.h), ink, 1.0f);
             }
             const float keyRight = W - Design::kMenuShortcutX;
-            DrawLabel(r.title, Text::PanelRow, Design::kMenuTextX, r.y, std::max(10.0f, keyRight - Design::kMenuTextX), r.h, ink, 1.0f);
+            float textX = Design::kMenuTextX;
+            if (r.icon) {  // overflow tray menu: the program's icon (bar-icon 16) before the title
+                if (ID2D1Bitmap* bmp = IconBitmap(r.icon)) {
+                    const float top = r.y + (r.h - Design::kBarIcon) * 0.5f;
+                    g_rt->DrawBitmap(bmp, D2D1::RectF(textX, top, textX + Design::kBarIcon, top + Design::kBarIcon), 1.0f,
+                                     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+                }
+                textX += Design::kBarIcon + Design::kTextIconGap;
+            }
+            DrawLabel(r.title, Text::PanelRow, textX, r.y, std::max(10.0f, keyRight - textX), r.h, ink, 1.0f);
             if (!r.value.empty()) {
                 const D2D1_COLOR_F keyInk = r.disabled ? Design::kInk3 : lit ? Design::kOnAccent : Design::kInk2;
                 DrawLabel(r.value, Text::PanelRow, Design::kMenuTextX, r.y, keyRight - Design::kMenuTextX, r.h, keyInk,
@@ -8058,6 +8381,9 @@ void Activate(const Row& r) {
         case kOpenForecast:
             OpenSettings((L"https://wttr.in/" + PercentEncodeUtf8(r.arg)).c_str());
             break;
+        case kTrayIcon:
+            Tray::Click(r.trayHwnd, r.trayUid, false);
+            break;
     }
 }
 
@@ -8392,6 +8718,18 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_CAPTURECHANGED:
             g.dragging = false;
             return 0;
+        case WM_RBUTTONDOWN:
+            return 0;
+        case WM_RBUTTONUP: {  // overflow tray menu: the program's own menu
+            const int i = RowAt(uy);
+            if (g.open && g.blinkRow < 0 && i >= 0 && i < static_cast<int>(g.rows.size()) &&
+                g.rows[i].action == kTrayIcon) {
+                const Row row = g.rows[i];
+                Close(true);
+                Tray::Click(row.trayHwnd, row.trayUid, true);
+            }
+            return 0;
+        }
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
@@ -17305,24 +17643,50 @@ void Paint(ID2D1RenderTarget* rt, D2D1_SIZE_F size, const BarStatus::Model& mode
     if (model.bluetooth >= 0) placeRight(kBluetooth, statusPad * 2.0f + iconBox);
     // Programs' tray icons, left of the system items like third-party menu
     // extras in macOS: the status box (8 + 16 + 8) each, 2 apart, the first one
-    // added nearest to the system items. As on a MacBook with a notch, icons
-    // that would reach the resting island (+ island-side-gap) are not shown;
-    // the ones shown hide one by one when the island grows (TopBar::Tick).
+    // added nearest to the system items. Only the ones Windows shows on the
+    // taskbar ("Other system tray icons"); the rest, and those that would reach
+    // the resting island (+ island-side-gap, as on a MacBook with a notch), are
+    // in the overflow menu behind a chevron left of them. The ones shown hide
+    // one by one when the island grows (TopBar::Tick).
     std::vector<Tray::Icon*> trayIcons;
+    Tray::LoadSettings(model.traySettings);
     Tray::Prune();
+    Tray::g_overflow.clear();
     {
         const float limit = width * 0.5f + (Design::kIdle.w * 0.5f + Design::kIslandSideGap) * k;
+        const float boxW = statusPad * 2.0f + iconBox;
+        std::vector<Tray::Icon*> promoted;
         for (Tray::Icon& icon : Tray::g_icons) {
-            if (icon.hidden || icon.pixels.empty() || out->trayCount >= Tray::kMaxShown) continue;
-            const float boxW = statusPad * 2.0f + iconBox;
-            if (r - boxW < limit) break;
-            const int n = out->trayCount++;
-            out->trayBoxes[n] = D2D1::RectF(r - boxW, 0.0f, r, height);
-            out->trayHwnd[n] = icon.hwnd;
-            out->trayUid[n] = icon.uid;
-            trayIcons.push_back(&icon);
+            if (!Tray::Usable(icon)) continue;
+            if (Tray::Promoted(icon)) {
+                promoted.push_back(&icon);
+            } else {
+                Tray::g_overflow.emplace_back(icon.hwnd, icon.uid);
+            }
+        }
+        auto span = [&](int count, bool chevron) {
+            float w = count * boxW + std::max(0, count - 1) * gap;
+            if (chevron) w += (count > 0 ? gap : 0.0f) + boxW;
+            return w;
+        };
+        const int wanted = std::min(static_cast<int>(promoted.size()), Tray::kMaxShown);
+        int n = wanted;
+        auto needChevron = [&](int count) {
+            return !Tray::g_overflow.empty() || count < static_cast<int>(promoted.size());
+        };
+        while (n > 0 && r - span(n, needChevron(n)) < limit) --n;
+        for (int i = n; i < static_cast<int>(promoted.size()); ++i) {
+            Tray::g_overflow.emplace_back(promoted[i]->hwnd, promoted[i]->uid);
+        }
+        for (int i = 0; i < n; ++i) {
+            out->trayBoxes[i] = D2D1::RectF(r - boxW, 0.0f, r, height);
+            out->trayHwnd[i] = promoted[i]->hwnd;
+            out->trayUid[i] = promoted[i]->uid;
+            trayIcons.push_back(promoted[i]);
             r -= boxW + gap;
         }
+        out->trayCount = n;
+        if (!Tray::g_overflow.empty() && r - boxW >= limit) placeRight(kTrayMore, boxW);
         Tray::g_lastShown = out->trayCount;
     }
 
@@ -17421,6 +17785,14 @@ void Paint(ID2D1RenderTarget* rt, D2D1_SIZE_F size, const BarStatus::Model& mode
                 if (level > 0) glyphAt(Design::kGlyphWifiLevel[level - 1], icons16, l, iconBox, WithAlpha(ink, a));
             }
         }
+    }
+    if (out->present[kTrayMore]) {  // the overflow chevron: chevron-right turned to point down
+        const float a = begin(kTrayMore);
+        const D2D1_RECT_F& box = out->boxes[kTrayMore];
+        D2D1_MATRIX_3X2_F item;
+        rt->GetTransform(&item);
+        rt->SetTransform(D2D1::Matrix3x2F::Rotation(90.0f, D2D1::Point2F((box.left + box.right) * 0.5f, cy)) * item);
+        glyphAt(Design::kGlyphChevronRight, icons16, box.left + statusPad, iconBox, WithAlpha(ink, a));
     }
     if (out->trayCount > 0) {
         const D2D1_BITMAP_PROPERTIES props =
