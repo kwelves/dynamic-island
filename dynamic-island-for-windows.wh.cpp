@@ -4376,6 +4376,11 @@ constexpr float kPanelEdgeSpread = 0.5f;       // shadow-panel ring: spread 0.5,
 constexpr float kPanelEdgeAlpha = 0.60f;
 constexpr float kPanelBlurStdDev = 30.0f;      // materials.panel.blurStdDevPx
 constexpr float kPanelSaturation = 1.8f;       // materials.panel.saturation
+// Deviation (visible glass, macOS-like): panel-bg is flooded at alpha 0.55 instead of
+// 0.80, but never lets the panel get brighter than panel-bg at 0.70 over pure
+// white would, so ink-1 keeps >= 4.5:1 over any backdrop.
+constexpr float kPanelGlassTintAlpha = 0.55f;
+constexpr float kPanelGlassReadableAlpha = 0.70f;
 constexpr float kKnobShadowY = 1.0f;           // shadow-knob: 0 1 3, 0.35
 constexpr float kKnobShadowAlpha = 0.35f;
 constexpr float kPanelOpenScale = 0.94f;       // motion.md: panel.open 0.94 -> 1
@@ -7145,10 +7150,13 @@ bool Build(const RECT& body, float sigma) {
     const float m[3][3] = {{0.213f + 0.787f * s, 0.715f - 0.715f * s, 0.072f - 0.072f * s},
                            {0.213f - 0.213f * s, 0.715f + 0.285f * s, 0.072f - 0.072f * s},
                            {0.213f - 0.213f * s, 0.715f - 0.715f * s, 0.072f + 0.928f * s}};
-    // Flood: panel-bg composited source-over the saturated backdrop.
+    // Flood: panel-bg composited source-over the saturated backdrop, at the
+    // glass alpha; where the backdrop is bright the alpha rises just enough to
+    // keep the brightest channel at or below the readable cap.
     const D2D1_COLOR_F& tint = Design::kPanelBg;
-    const float keep = 1.0f - tint.a;
-    const float add[3] = {tint.r * tint.a * 255.0f, tint.g * tint.a * 255.0f, tint.b * tint.a * 255.0f};
+    const float tint255[3] = {tint.r * 255.0f, tint.g * 255.0f, tint.b * 255.0f};
+    const float tintMax = std::max({tint255[0], tint255[1], tint255[2]});
+    const float cap = tintMax * Design::kPanelGlassReadableAlpha + 255.0f * (1.0f - Design::kPanelGlassReadableAlpha);
     const int cw = crop.right - crop.left;
     const int ch = crop.bottom - crop.top;
     std::vector<uint32_t> out(static_cast<size_t>(cw) * ch);
@@ -7157,10 +7165,17 @@ bool Build(const RECT& body, float sigma) {
         uint32_t* o = &out[static_cast<size_t>(y) * cw];
         for (int x = 0; x < cw; ++x, p += 4) {
             const float rgb[3] = {static_cast<float>(p[2]), static_cast<float>(p[1]), static_cast<float>(p[0])};
+            float sat[3];
+            for (int c = 0; c < 3; ++c) {
+                sat[c] = std::clamp(m[c][0] * rgb[0] + m[c][1] * rgb[1] + m[c][2] * rgb[2], 0.0f, 255.0f);
+            }
+            const float peak = std::max({sat[0], sat[1], sat[2]});
+            float alpha = Design::kPanelGlassTintAlpha;
+            if (peak > cap) alpha = std::max(alpha, (peak - cap) / (peak - tintMax));
             uint32_t px = 0xFF000000u;
             for (int c = 0; c < 3; ++c) {
-                const float v = std::clamp(m[c][0] * rgb[0] + m[c][1] * rgb[1] + m[c][2] * rgb[2], 0.0f, 255.0f);
-                px |= static_cast<uint32_t>(std::lround(add[c] + v * keep)) << (16 - 8 * c);
+                const float v = tint255[c] * alpha + sat[c] * (1.0f - alpha);
+                px |= static_cast<uint32_t>(std::lround(std::clamp(v, 0.0f, 255.0f))) << (16 - 8 * c);
             }
             o[x] = px;
         }
