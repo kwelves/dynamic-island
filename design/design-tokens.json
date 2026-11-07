@@ -115,12 +115,12 @@
     ]
    },
    "panel-bg": {
-    "hex": "#262628CC",
+    "hex": "#2626288C",
     "rgba": [
      0.149,
      0.149,
      0.1569,
-     0.8
+     0.55
     ]
    },
    "panel-bg-solid": {
@@ -944,7 +944,9 @@
    "fallback": "panel-bg-solid",
    "rim": "panel-rim",
    "edge": "panel-edge",
-   "d2dChain": "backdrop → GaussianBlur(σ30, BORDER_MODE_HARD) → Saturation(1.8) → Flood(panel-bg) composite SOURCE_OVER → clip RoundedRect(radius-panel)"
+   "readableAlpha": 0.7,
+   "readableNote": "Тёмная тема: заливка panel-bg (0.55) над светлым фоном уплотняется так, чтобы самый яркий канал панели не превышал panel-bg с альфой readableAlpha поверх белого (≈104 из 255): ink-1 держит ≥ 4.5:1 над любым фоном. Прототип показывает только базовую заливку 0.55.",
+   "d2dChain": "backdrop → GaussianBlur(σ30, BORDER_MODE_HARD) → Saturation(1.8) → Flood(panel-bg, alpha = max(0.55, readable cap)) composite SOURCE_OVER → clip RoundedRect(radius-panel)"
   },
   "barSolid": {
    "fill": "bar-bg"
