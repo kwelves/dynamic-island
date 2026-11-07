@@ -4376,11 +4376,7 @@ constexpr float kPanelEdgeSpread = 0.5f;       // shadow-panel ring: spread 0.5,
 constexpr float kPanelEdgeAlpha = 0.60f;
 constexpr float kPanelBlurStdDev = 30.0f;      // materials.panel.blurStdDevPx
 constexpr float kPanelSaturation = 1.8f;       // materials.panel.saturation
-// Deviation (visible glass, macOS-like): panel-bg is flooded at alpha 0.55 instead of
-// 0.80, but never lets the panel get brighter than panel-bg at 0.70 over pure
-// white would, so ink-1 keeps >= 4.5:1 over any backdrop.
-constexpr float kPanelGlassTintAlpha = 0.55f;
-constexpr float kPanelGlassReadableAlpha = 0.70f;
+constexpr float kPanelReadableAlpha = 0.70f;   // materials.panel.readableAlpha
 constexpr float kKnobShadowY = 1.0f;           // shadow-knob: 0 1 3, 0.35
 constexpr float kKnobShadowAlpha = 0.35f;
 constexpr float kPanelOpenScale = 0.94f;       // motion.md: panel.open 0.94 -> 1
@@ -4429,7 +4425,7 @@ constexpr D2D1_COLOR_F kOnAccent{1.0f, 1.0f, 1.0f, 1.0f};            // on-accen
 constexpr D2D1_COLOR_F kRed{1.0f, 0.2706f, 0.2275f, 1.0f};           // red
 constexpr D2D1_COLOR_F kIslandTrack{1.0f, 1.0f, 1.0f, 0.2f};         // island-track
 constexpr D2D1_COLOR_F kBarHighlight{1.0f, 1.0f, 1.0f, 0.22f};       // bar-highlight
-constexpr D2D1_COLOR_F kPanelBg{0.149f, 0.149f, 0.157f, 0.8f};       // panel-bg
+constexpr D2D1_COLOR_F kPanelBg{0.149f, 0.149f, 0.157f, 0.55f};      // panel-bg
 constexpr D2D1_COLOR_F kPanelBgSolid{0.149f, 0.149f, 0.157f, 1.0f};  // panel-bg-solid
 constexpr D2D1_COLOR_F kPanelRim{1.0f, 1.0f, 1.0f, 0.129f};          // panel-rim
 constexpr D2D1_COLOR_F kInk1{1.0f, 1.0f, 1.0f, 0.859f};              // ink-1
@@ -5194,7 +5190,7 @@ std::wstring PercentEncodeUtf8(const std::wstring& text);            // defined 
 
 // Click-to-open panels under the bar (defined after TopBar).
 namespace Panels {
-constexpr UINT kCloseMessage = WM_APP + 0x44C;  // input hooks: Esc / a click elsewhere
+constexpr UINT kCloseMessage = WM_APP + 0x44C;  // input hooks: Esc / a click elsewhere / another active window
 constexpr UINT kStepMessage = WM_APP + 0x44D;   // input hooks: wParam 1 = right, 0 = left
 constexpr UINT kDataMessage = WM_APP + 0x44E;   // worker: Bluetooth list / radio result
 constexpr UINT kMenuKeyMessage = WM_APP + 0x44F;  // input hooks: ↑ / ↓ / Enter in a menu (wParam = vk)
@@ -5781,7 +5777,8 @@ void EmergencyRemove() {
 // bar. Its material is materials.panel: the screen under it blurred, saturated
 // and flooded with panel-bg (see Material), or panel-bg-solid when the screen
 // cannot be captured. While a panel is open, low-level mouse and keyboard hooks (own
-// thread) watch for Esc, arrows and clicks elsewhere; they are removed again
+// thread) watch for Esc, arrows, clicks elsewhere and another window becoming
+// active (Alt+Tab, Win); they are removed again
 // when it closes. Radio, Bluetooth, Wi-Fi and energy queries (blocking) run on
 // a worker thread.
 // Everything else runs on the render thread, which owns the bar.
@@ -6343,6 +6340,12 @@ std::atomic<bool> g_hooksWanted{false};
 std::atomic<bool> g_menuKeys{false};  // a menu is open: ↑ / ↓ / Enter belong to it too
 HHOOK g_mouseHook = nullptr;
 HHOOK g_keyHook = nullptr;
+HWINEVENTHOOK g_foregroundHook = nullptr;
+std::atomic<ULONGLONG> g_openTick{0};
+// Clicking the bar while Start or a system flyout is open dismisses it, and
+// Windows hands the foreground back just after the panel has opened: that
+// switch is not the user's and is ignored.
+constexpr ULONGLONG kForegroundGraceMs = 300;
 std::mutex g_bodyMutex;  // leaf lock
 RECT g_bodyRect = {};    // the open panel's body, screen px
 
@@ -6385,6 +6388,15 @@ LRESULT CALLBACK KeyHookProc(int code, WPARAM wParam, LPARAM lParam) {
     return CallNextHookEx(g_keyHook, code, wParam, lParam);
 }
 
+// Another window became active (Alt+Tab, Win, Win+D, an app taking focus):
+// the panel closes, as a macOS menu does. Our own process (bar, island, its
+// context menu) is skipped by WINEVENT_SKIPOWNPROCESS.
+void CALLBACK ForegroundProc(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD) {
+    if (!g_hooksWanted.load(std::memory_order_relaxed)) return;
+    if (GetTickCount64() - g_openTick.load(std::memory_order_relaxed) < kForegroundGraceMs) return;
+    if (HWND h = BarStatus::g_notifyHwnd.load()) PostMessageW(h, kCloseMessage, 0, 0);
+}
+
 DWORD WINAPI InputThreadProc(void*) {
     MSG msg;
     PeekMessageW(&msg, nullptr, 0, 0, PM_NOREMOVE);  // create the queue
@@ -6394,11 +6406,16 @@ DWORD WINAPI InputThreadProc(void*) {
         if (wanted && !g_mouseHook) {
             g_mouseHook = SetWindowsHookExW(WH_MOUSE_LL, MouseHookProc, nullptr, 0);
             g_keyHook = SetWindowsHookExW(WH_KEYBOARD_LL, KeyHookProc, nullptr, 0);
+            g_foregroundHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
+                                               ForegroundProc, 0, 0,
+                                               WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
         } else if (!wanted && g_mouseHook) {
             UnhookWindowsHookEx(g_mouseHook);
             g_mouseHook = nullptr;
             if (g_keyHook) UnhookWindowsHookEx(g_keyHook);
             g_keyHook = nullptr;
+            if (g_foregroundHook) UnhookWinEvent(g_foregroundHook);
+            g_foregroundHook = nullptr;
         }
         while (PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) {
@@ -6411,11 +6428,14 @@ DWORD WINAPI InputThreadProc(void*) {
     }
     if (g_mouseHook) UnhookWindowsHookEx(g_mouseHook);
     if (g_keyHook) UnhookWindowsHookEx(g_keyHook);
+    if (g_foregroundHook) UnhookWinEvent(g_foregroundHook);
     g_mouseHook = g_keyHook = nullptr;
+    g_foregroundHook = nullptr;
     return 0;
 }
 
 void SetHooks(bool on) {
+    if (on) g_openTick.store(GetTickCount64());  // every Open, including ← / → and menu tracking
     if (g_hooksWanted.exchange(on) == on) return;
     if (g_inputThreadId) PostThreadMessageW(g_inputThreadId, WM_NULL, 0, 0);
 }
@@ -7150,13 +7170,13 @@ bool Build(const RECT& body, float sigma) {
     const float m[3][3] = {{0.213f + 0.787f * s, 0.715f - 0.715f * s, 0.072f - 0.072f * s},
                            {0.213f - 0.213f * s, 0.715f + 0.285f * s, 0.072f - 0.072f * s},
                            {0.213f - 0.213f * s, 0.715f - 0.715f * s, 0.072f + 0.928f * s}};
-    // Flood: panel-bg composited source-over the saturated backdrop, at the
-    // glass alpha; where the backdrop is bright the alpha rises just enough to
-    // keep the brightest channel at or below the readable cap.
+    // Flood: panel-bg (alpha 0.55) composited source-over the saturated
+    // backdrop; where the backdrop is bright the alpha rises just enough to keep
+    // the brightest channel at or below panel-bg at readableAlpha over white.
     const D2D1_COLOR_F& tint = Design::kPanelBg;
     const float tint255[3] = {tint.r * 255.0f, tint.g * 255.0f, tint.b * 255.0f};
     const float tintMax = std::max({tint255[0], tint255[1], tint255[2]});
-    const float cap = tintMax * Design::kPanelGlassReadableAlpha + 255.0f * (1.0f - Design::kPanelGlassReadableAlpha);
+    const float cap = tintMax * Design::kPanelReadableAlpha + 255.0f * (1.0f - Design::kPanelReadableAlpha);
     const int cw = crop.right - crop.left;
     const int ch = crop.bottom - crop.top;
     std::vector<uint32_t> out(static_cast<size_t>(cw) * ch);
@@ -7170,7 +7190,7 @@ bool Build(const RECT& body, float sigma) {
                 sat[c] = std::clamp(m[c][0] * rgb[0] + m[c][1] * rgb[1] + m[c][2] * rgb[2], 0.0f, 255.0f);
             }
             const float peak = std::max({sat[0], sat[1], sat[2]});
-            float alpha = Design::kPanelGlassTintAlpha;
+            float alpha = tint.a;
             if (peak > cap) alpha = std::max(alpha, (peak - cap) / (peak - tintMax));
             uint32_t px = 0xFF000000u;
             for (int c = 0; c < 3; ++c) {
