@@ -4374,6 +4374,8 @@ constexpr float kPanelShadowStdDev = 18.0f;
 constexpr float kPanelShadowAlpha = 0.45f;
 constexpr float kPanelEdgeSpread = 0.5f;       // shadow-panel ring: spread 0.5, 0.60
 constexpr float kPanelEdgeAlpha = 0.60f;
+constexpr float kPanelBlurStdDev = 30.0f;      // materials.panel.blurStdDevPx
+constexpr float kPanelSaturation = 1.8f;       // materials.panel.saturation
 constexpr float kKnobShadowY = 1.0f;           // shadow-knob: 0 1 3, 0.35
 constexpr float kKnobShadowAlpha = 0.35f;
 constexpr float kPanelOpenScale = 0.94f;       // motion.md: panel.open 0.94 -> 1
@@ -5771,8 +5773,9 @@ void EmergencyRemove() {
 //
 // The panel is one layered, topmost, never-activated window (WS_EX_TOOLWINDOW |
 // WS_EX_NOACTIVATE), painted with Direct2D in design units and scaled like the
-// bar. Its material is panel-bg-solid: the design's fallback for the blurred
-// panel-bg. While a panel is open, low-level mouse and keyboard hooks (own
+// bar. Its material is materials.panel: the screen under it blurred, saturated
+// and flooded with panel-bg (see Material), or panel-bg-solid when the screen
+// cannot be captured. While a panel is open, low-level mouse and keyboard hooks (own
 // thread) watch for Esc, arrows and clicks elsewhere; they are removed again
 // when it closes. Radio, Bluetooth, Wi-Fi and energy queries (blocking) run on
 // a worker thread.
@@ -6891,8 +6894,15 @@ bool EnsureWindow() {
     return g_wnd != nullptr;
 }
 
+namespace Material {
+void ReleaseDevice();
+void Release();
+void Capture(const RECT& mon);
+}  // namespace Material
+
 void ReleaseSurface() {
     g_iconBitmaps.clear();
+    Material::ReleaseDevice();
     g_brush.Reset();
     g_rt.Reset();
     if (g_dc) {
@@ -7000,6 +7010,196 @@ D2D1_RECT_F ChevronRect(const Row& r, bool next) {
 float CalCellWidth() {
     return (g.width - Design::kPanelContentX * 2.0f) / 7.0f;
 }
+
+// ── Material: design-tokens.json materials.panel ─────────────────────────────
+// backdrop → GaussianBlur(σ30) → Saturation(1.8) → Flood(panel-bg) → clip to
+// radius-panel / radius-menu. DWM cannot blur behind a layered window and a DC
+// render target has no effects, so the chain runs on the CPU: the monitor is
+// captured once, just before a panel appears (nothing of ours covers the area
+// yet), and the part under the panel body is blurred (three box passes, the
+// usual Gaussian approximation), saturated and flooded into one bitmap. It is
+// drawn fixed to the screen, so it stays put while the panel scales and fades.
+// Switching panels reuses the capture; it is dropped when the window hides.
+// Without a capture the panel falls back to panel-bg-solid.
+namespace Material {
+
+HBITMAP g_shot = nullptr;
+const uint8_t* g_shotBits = nullptr;
+RECT g_shotRect = {};  // screen px
+ComPtr<ID2D1Bitmap> g_blurBitmap;
+ComPtr<ID2D1BitmapBrush> g_blurBrush;
+RECT g_blurRect = {};      // panel body the bitmap was built for (screen px)
+POINT g_blurOrigin = {};   // screen px of the bitmap's top-left pixel
+bool g_blurTried = false;  // built (or failed) for g_blurRect
+
+// Device resources live on g_rt and go with it.
+void ReleaseDevice() {
+    g_blurBrush.Reset();
+    g_blurBitmap.Reset();
+    g_blurRect = {};
+    g_blurTried = false;
+}
+
+void Release() {
+    ReleaseDevice();
+    if (g_shot) DeleteObject(g_shot);
+    g_shot = nullptr;
+    g_shotBits = nullptr;
+    g_shotRect = {};
+}
+
+void Capture(const RECT& mon) {
+    Release();
+    const int w = mon.right - mon.left;
+    const int h = mon.bottom - mon.top;
+    if (w <= 0 || h <= 0) return;
+    HDC screen = GetDC(nullptr);
+    if (!screen) return;
+    HDC mem = CreateCompatibleDC(screen);
+    BITMAPINFO bi = {};
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = w;
+    bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    void* bits = nullptr;
+    HBITMAP bmp = mem ? CreateDIBSection(mem, &bi, DIB_RGB_COLORS, &bits, nullptr, 0) : nullptr;
+    bool ok = false;
+    if (bmp && bits) {
+        HGDIOBJ old = SelectObject(mem, bmp);
+        ok = BitBlt(mem, 0, 0, w, h, screen, mon.left, mon.top, SRCCOPY | CAPTUREBLT) != FALSE;
+        SelectObject(mem, old);
+        GdiFlush();
+    }
+    if (mem) DeleteDC(mem);
+    ReleaseDC(nullptr, screen);
+    if (!ok) {
+        if (bmp) DeleteObject(bmp);
+        Wh_Log(L"Panels: backdrop capture failed (%lu), solid panel.", GetLastError());
+        return;
+    }
+    g_shot = bmp;
+    g_shotBits = static_cast<const uint8_t*>(bits);
+    g_shotRect = mon;
+}
+
+// Radii of three box blurs whose sum approximates a Gaussian of `sigma`.
+void BoxRadii(float sigma, int out[3]) {
+    const float ideal = std::sqrt(12.0f * sigma * sigma / 3.0f + 1.0f);
+    int wl = std::max(1, static_cast<int>(std::floor(ideal)));
+    if (wl % 2 == 0) --wl;
+    const int wu = wl + 2;
+    const float mIdeal = (12.0f * sigma * sigma - 3.0f * wl * wl - 12.0f * wl - 9.0f) / (-4.0f * wl - 4.0f);
+    const int m = static_cast<int>(std::lround(mIdeal));
+    for (int i = 0; i < 3; ++i) out[i] = ((i < m ? wl : wu) - 1) / 2;
+}
+
+// One box blur of radius r along `count` pixels `step` bytes apart, for `lines`
+// lines `lineStep` bytes apart; B, G, R only, edges clamped.
+void BoxPass(const uint8_t* src, uint8_t* dst, int count, int lines, size_t step, size_t lineStep, int r) {
+    const int div = 2 * r + 1;
+    for (int line = 0; line < lines; ++line) {
+        const uint8_t* s = src + line * lineStep;
+        uint8_t* d = dst + line * lineStep;
+        for (int c = 0; c < 3; ++c) {
+            auto at = [&](int i) { return static_cast<int>(s[std::clamp(i, 0, count - 1) * step + c]); };
+            int sum = (r + 1) * at(0);
+            for (int i = 1; i <= r; ++i) sum += at(i);
+            for (int i = 0; i < count; ++i) {
+                d[i * step + c] = static_cast<uint8_t>((sum + r) / div);
+                sum += at(i + r + 1) - at(i - r);
+            }
+        }
+    }
+}
+
+// Builds the material bitmap for the panel body (screen px). Cached per rect.
+bool Build(const RECT& body, float sigma) {
+    if (g_blurTried && EqualRect(&body, &g_blurRect)) return g_blurBrush != nullptr;
+    ReleaseDevice();
+    g_blurRect = body;
+    g_blurTried = true;
+    if (!g_shot || !g_rt) return false;
+    int radii[3];
+    BoxRadii(sigma, radii);
+    const int margin = radii[0] + radii[1] + radii[2] + 1;
+    RECT src = {body.left - margin, body.top - margin, body.right + margin, body.bottom + margin};
+    RECT crop = {};
+    if (!IntersectRect(&src, &src, &g_shotRect) || !IntersectRect(&crop, &body, &g_shotRect)) return false;
+    const int w = src.right - src.left;
+    const int h = src.bottom - src.top;
+    const size_t stride = static_cast<size_t>(w) * 4;
+    const size_t shotStride = static_cast<size_t>(g_shotRect.right - g_shotRect.left) * 4;
+    std::vector<uint8_t> a(stride * h), b(stride * h);
+    for (int y = 0; y < h; ++y) {
+        memcpy(&a[y * stride],
+               g_shotBits + (src.top - g_shotRect.top + y) * shotStride + (src.left - g_shotRect.left) * 4, stride);
+    }
+    for (int r : radii) {
+        BoxPass(a.data(), b.data(), w, h, 4, stride, r);  // rows
+        BoxPass(b.data(), a.data(), h, w, stride, 4, r);  // columns
+    }
+    // Saturation: the SVG feColorMatrix "saturate" matrix D2D's effect uses.
+    const float s = Design::kPanelSaturation;
+    const float m[3][3] = {{0.213f + 0.787f * s, 0.715f - 0.715f * s, 0.072f - 0.072f * s},
+                           {0.213f - 0.213f * s, 0.715f + 0.285f * s, 0.072f - 0.072f * s},
+                           {0.213f - 0.213f * s, 0.715f - 0.715f * s, 0.072f + 0.928f * s}};
+    // Flood: panel-bg composited source-over the saturated backdrop.
+    const D2D1_COLOR_F& tint = Design::kPanelBg;
+    const float keep = 1.0f - tint.a;
+    const float add[3] = {tint.r * tint.a * 255.0f, tint.g * tint.a * 255.0f, tint.b * tint.a * 255.0f};
+    const int cw = crop.right - crop.left;
+    const int ch = crop.bottom - crop.top;
+    std::vector<uint32_t> out(static_cast<size_t>(cw) * ch);
+    for (int y = 0; y < ch; ++y) {
+        const uint8_t* p = &a[(crop.top - src.top + y) * stride + (crop.left - src.left) * 4];
+        uint32_t* o = &out[static_cast<size_t>(y) * cw];
+        for (int x = 0; x < cw; ++x, p += 4) {
+            const float rgb[3] = {static_cast<float>(p[2]), static_cast<float>(p[1]), static_cast<float>(p[0])};
+            uint32_t px = 0xFF000000u;
+            for (int c = 0; c < 3; ++c) {
+                const float v = std::clamp(m[c][0] * rgb[0] + m[c][1] * rgb[1] + m[c][2] * rgb[2], 0.0f, 255.0f);
+                px |= static_cast<uint32_t>(std::lround(add[c] + v * keep)) << (16 - 8 * c);
+            }
+            o[x] = px;
+        }
+    }
+    const D2D1_BITMAP_PROPERTIES props =
+        D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+    if (FAILED(g_rt->CreateBitmap(D2D1::SizeU(cw, ch), out.data(), cw * 4, &props, g_blurBitmap.GetAddressOf()))) {
+        return false;
+    }
+    const D2D1_BITMAP_BRUSH_PROPERTIES brushProps = D2D1::BitmapBrushProperties(
+        D2D1_EXTEND_MODE_CLAMP, D2D1_EXTEND_MODE_CLAMP, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+    if (FAILED(g_rt->CreateBitmapBrush(g_blurBitmap.Get(), brushProps, g_blurBrush.GetAddressOf()))) {
+        g_blurBitmap.Reset();
+        return false;
+    }
+    g_blurOrigin = {crop.left, crop.top};
+    return true;
+}
+
+// Fills the panel shape (drawn under `base`) with the material. False: no
+// capture, the caller paints panel-bg-solid.
+bool Fill(const D2D1_ROUNDED_RECT& shape, const D2D1_MATRIX_3X2_F& base) {
+    const LONG left = g.wx + std::lround(g.marginX);
+    const LONG top = g.wy + std::lround(g.marginTop);
+    const RECT body = {left, top, left + static_cast<LONG>(std::ceil(g.width * g.scale)),
+                       top + static_cast<LONG>(std::ceil(g.height * g.scale))};
+    if (!Build(body, Design::kPanelBlurStdDev * g.scale)) return false;
+    D2D1_MATRIX_3X2_F inverse = base;
+    if (!D2D1InvertMatrix(&inverse)) return false;
+    // Bitmap px -> window px, then back through the panel transform: the
+    // backdrop stays where it is on screen whatever the panel's scale and dy.
+    g_blurBrush->SetTransform(D2D1::Matrix3x2F::Translation(static_cast<float>(g_blurOrigin.x - g.wx),
+                                                            static_cast<float>(g_blurOrigin.y - g.wy)) *
+                              *D2D1::Matrix3x2F::ReinterpretBaseType(&inverse));
+    g_rt->FillRoundedRectangle(shape, g_blurBrush.Get());
+    return true;
+}
+
+}  // namespace Material
 
 void DrawShadow(D2D1_RECT_F body) {
     // shadow-panel: 0 12 36 rgba(0,0,0,.45), drawn as stacked rounded rects (a DC
@@ -7272,7 +7472,9 @@ void Render(float opacity, float scale, float dy) {
     const D2D1_RECT_F body = D2D1::RectF(0.0f, 0.0f, g.width, g.height);
     DrawShadow(body);
     const D2D1_ROUNDED_RECT shape = D2D1::RoundedRect(body, g.radius, g.radius);
-    if (ID2D1SolidColorBrush* b = Brush(Design::kPanelBgSolid)) g_rt->FillRoundedRectangle(shape, b);
+    if (!Material::Fill(shape, base)) {
+        if (ID2D1SolidColorBrush* b = Brush(Design::kPanelBgSolid)) g_rt->FillRoundedRectangle(shape, b);
+    }
     for (int i = 0; i < static_cast<int>(g.rows.size()); ++i) DrawRow(i, base);
     // panel-rim: inset 0 0 0 1px
     const float h = Design::kHairline * 0.5f;
@@ -7283,6 +7485,7 @@ void Render(float opacity, float scale, float dy) {
     }
     if (g_rt->EndDraw() == static_cast<HRESULT>(D2DERR_RECREATE_TARGET)) {
         g_iconBitmaps.clear();
+        Material::ReleaseDevice();
         g_rt.Reset();
         g_brush.Reset();
         return;
@@ -7342,6 +7545,7 @@ void InvalidateBar() {
 void HideWindow() {
     if (g_wnd) ShowWindow(g_wnd, SW_HIDE);
     if (GetCapture() == g_wnd) ReleaseCapture();
+    Material::Release();
     g.closing = false;
     g.item = -1;
     g.dragging = false;
@@ -7434,6 +7638,9 @@ void Open(int item, bool animate) {
     g.hlAlpha = 1.0f;
     g.hlOffStart = -1.0;
     InvalidateBar();
+    // materials.panel: the backdrop is captured before the window shows; a
+    // visible window (menu tracking, ← / →, reopening while closing) keeps it.
+    if (!IsWindowVisible(g_wnd)) Material::Capture(TopBar::g_monitorRect);
     RenderCurrent();
     SetWindowPos(g_wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     g.lastTick = NowSeconds();
