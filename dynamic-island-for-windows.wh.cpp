@@ -6982,6 +6982,11 @@ HHOOK g_mouseHook = nullptr;
 HHOOK g_keyHook = nullptr;
 HWINEVENTHOOK g_foregroundHook = nullptr;
 std::atomic<ULONGLONG> g_openTick{0};
+// A program menu that closes hands activation back (Electron apps return it to
+// the window that had it): for this long after we close one, a change of the
+// active window is that echo, not the user switching apps.
+std::atomic<ULONGLONG> g_foregroundQuietUntil{0};
+constexpr ULONGLONG kMenuCloseQuietMs = 1000;
 // Clicking the bar while Start or a system flyout is open dismisses it, and
 // Windows hands the foreground back just after the panel has opened: that
 // switch is not the user's and is ignored.
@@ -7076,6 +7081,7 @@ LRESULT CALLBACK KeyHookProc(int code, WPARAM wParam, LPARAM lParam) {
 void CALLBACK ForegroundProc(HWINEVENTHOOK, DWORD, HWND hwnd, LONG, LONG, DWORD, DWORD) {
     if (!g_hooksWanted.load(std::memory_order_relaxed)) return;
     if (GetTickCount64() - g_openTick.load(std::memory_order_relaxed) < kForegroundGraceMs) return;
+    if (GetTickCount64() < g_foregroundQuietUntil.load(std::memory_order_relaxed)) return;
     if (const DWORD menuPid = g_appMenuPid.load(std::memory_order_relaxed)) {
         DWORD pid = 0;
         GetWindowThreadProcessId(hwnd, &pid);
@@ -7532,6 +7538,7 @@ void CloseAppMenu() {
     const std::vector<HWND> menus = AppMenuWindows();
     const HWND owner = g.appMenuIcon;
     EndAppMenu();
+    g_foregroundQuietUntil.store(GetTickCount64() + kMenuCloseQuietMs);
     for (auto it = menus.rbegin(); it != menus.rend(); ++it) {  // innermost first
         PostMessageW(*it, WM_KEYDOWN, VK_ESCAPE, 0x00010001);
         PostMessageW(*it, WM_KEYUP, VK_ESCAPE, 0xC0010001);
@@ -8716,13 +8723,21 @@ void Track(int item);
 // onto another bar item closes that menu and switches to the item's panel.
 void AppMenuHover(POINT pt) {
     g_appMenuHoverPosted.store(false);
-    if (!g.open || g.appMenuRow < 0) return;
+    if (!g_appMenuPid.load()) return;
+    // Onto another item with a panel (from an overflow row's menu or a bar
+    // icon's): that menu closes and the item's panel opens, as menu tracking.
     const int item = TopBar::PanelItemAt(pt);
-    if (item >= 0 && item != g.item) {
+    if (item >= 0 && (!g.open || item != g.item)) {
         CloseAppMenu();
-        Track(item);
+        if (g.open) {
+            Track(item);
+        } else {
+            Open(item, true);
+            g.trackedAt = NowSeconds();
+        }
         return;
     }
+    if (!g.open || g.appMenuRow < 0) return;
     const int hover = RowAtScreen(pt);
     if (hover != g.hover) {
         g.hover = hover;
