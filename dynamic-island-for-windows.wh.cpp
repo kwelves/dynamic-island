@@ -129,6 +129,9 @@ We love community contributions! To ensure high-quality updates, please follow t
   - Height: 0
     $name: Bar height
     $description: Height in pixels at 100% size scale; it grows with Size scale and DPI just like the island. 0 = automatic (32, the design's bar height).
+  - ShowAppName: false
+    $name: Show app name
+    $description: Shows the name of the active app next to the Windows logo, like the app name in the macOS menu bar. Off, the items after it move up to the logo.
   $name: Top bar
 - Appearance:
   - Position: top-center
@@ -1249,6 +1252,7 @@ struct Settings {
     bool topBarEnabled = true;
     bool topBarSolid = false;       // false = acrylic
     int topBarHeight = 0;           // content px before sizeScale; 0 = automatic
+    bool topBarShowAppName = false; // the active app's name after the logo
 
     Position position = Position::TopCenter;
     int targetMonitor = 0;
@@ -3143,6 +3147,7 @@ void LoadSettings() {
     next.topBarEnabled = Wh_GetIntSetting(L"TopBar.Enabled") != 0;
     next.topBarSolid = EqualsNoCase(GetStringSettingCopy(L"TopBar.Material"), L"solid");
     next.topBarHeight = ClampInt(Wh_GetIntSetting(L"TopBar.Height"), 0, 200);
+    next.topBarShowAppName = Wh_GetIntSetting(L"TopBar.ShowAppName") != 0;
     // The bar lives on the top edge, so the island cannot sit at the bottom.
     if (next.topBarEnabled && IsBottomPosition(next.position)) {
         next.position = Position::TopCenter;
@@ -7239,6 +7244,7 @@ struct State {
     double radioPendingUntil = 0.0;
     int calYear = 0;
     int calMonth = 0;
+    double trackedAt = -1.0;       // when menu tracking last switched to the open item
     int appMenuRow = -1;           // overflow menu: the row whose program's own menu is open
     bool appMenuOnBar = false;     // ... or a bar tray icon's (no panel needed)
     HWND appMenuIcon = nullptr;    // the tray icon whose program menu is open
@@ -8548,6 +8554,9 @@ void Open(int item, bool animate) {
 // app that had it) and waits for the flyout to go before showing the panel (its
 // backdrop is captured on show).
 constexpr double kFlyoutWaitSec = 0.5;
+// A click on the item menu tracking switched to less than this ago keeps it open
+// (agreed behaviour, not in design/: motion.md only says tracking switches at once).
+constexpr double kTrackedClickSec = 0.5;
 
 bool IsShellFlyout(HWND hwnd) {
     DWORD pid = 0;
@@ -8599,6 +8608,9 @@ void Toggle(int item) {
         if (same) return;  // a second click before it opened
     }
     if (g.open && g.item == item) {
+        // Slid onto it with the mouse a moment ago (menu tracking) and clicked:
+        // the click meant "open", so it stays open.
+        if (NowSeconds() - g.trackedAt < kTrackedClickSec) return;
         Close(true);
         return;
     }
@@ -8618,7 +8630,10 @@ void Toggle(int item) {
 }
 
 void Track(int item) {
-    if (g.open && g.item != item && HasPanel(item)) Open(item, false);
+    if (g.open && g.item != item && HasPanel(item)) {
+        Open(item, false);
+        g.trackedAt = NowSeconds();
+    }
 }
 
 // ← / →: the neighbouring item with a panel, in screen order, skipping hidden ones.
@@ -18053,7 +18068,7 @@ void Paint(ID2D1RenderTarget* rt, D2D1_SIZE_F size, const BarStatus::Model& mode
     x = out->boxes[kLogo].right;
 
     ComPtr<IDWriteTextLayout> appText;
-    if (!model.appName.empty()) {
+    if (g_settings.topBarShowAppName && !model.appName.empty()) {  // setting "Show app name", off by default
         appText = Layout(model.appName, T::BarApp, k, 10000.0f, height);
         setBox(kApp, x, x + itemPad * 2.0f + Width(appText.Get()));
         x = out->boxes[kApp].right;
