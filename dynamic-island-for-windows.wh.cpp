@@ -5162,6 +5162,150 @@ DWORD WINAPI ThreadProc(void*) {
 
 }  // namespace BarStatus
 
+// ── Tray icons (from the Explorer bridge mod) ────────────────────────────────
+// dynamic-island-tray-bridge.wh.cpp runs inside Explorer, watches what programs
+// send to the notification area (Shell_NotifyIcon) and copies every change here
+// as WM_COPYDATA to the bar window, with the icon already rasterised. Explorer
+// keeps handling the icons itself. The wire format below must match the bridge.
+// Render thread only: the bar window, which receives the data, lives there.
+namespace Tray {
+
+constexpr ULONG_PTR kCopyDataId = 0x52544944;  // 'DITR'
+constexpr uint32_t kMagic = 0x31544944;        // 'DIT1'
+constexpr uint32_t kHello = 0xFFFFFFFF;        // the bridge (re)started
+constexpr uint32_t kQuery = 0xFFFFFFFE;        // diagnostics: the reply packs the counters below
+constexpr uint32_t kMaxIconPx = 64;
+constexpr int kMaxShown = 32;
+
+#pragma pack(push, 1)
+struct Packet {
+    uint32_t magic;
+    uint32_t size;     // header + pixels
+    uint32_t message;  // NIM_* or kHello
+    uint32_t flags;    // NIF_*
+    uint64_t hwnd;
+    uint32_t uid;
+    uint32_t callbackMessage;
+    uint32_t state;
+    uint32_t stateMask;
+    uint32_t version;
+    GUID guid;
+    wchar_t tip[128];
+    uint32_t iconW;
+    uint32_t iconH;
+    // iconW * iconH premultiplied BGRA pixels follow
+};
+#pragma pack(pop)
+
+struct Icon {
+    HWND hwnd = nullptr;
+    UINT uid = 0;
+    GUID guid = {};
+    bool hasGuid = false;
+    UINT callbackMessage = 0;
+    UINT version = 0;
+    std::wstring tip;
+    bool hidden = false;
+    uint32_t w = 0, h = 0;
+    std::vector<uint32_t> pixels;
+    ComPtr<ID2D1Bitmap> bitmap;  // on the bar's render target
+};
+
+std::vector<Icon> g_icons;  // in the order they were added
+bool g_selfBroadcast = false;
+// Diagnostics for kQuery (tests send it; the bridge never does).
+int g_lastShown = 0;       // icons laid out by the last bar paint
+int g_bitmapFailures = 0;  // CreateBitmap failures
+
+void ReleaseBitmaps() {
+    for (Icon& icon : g_icons) icon.bitmap.Reset();
+}
+
+// Asks every program to add its tray icons again, as Explorer does after a
+// restart. Our own windows (this thread) get it synchronously and ignore it.
+void RequestIcons() {
+    static const UINT taskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+    g_selfBroadcast = true;
+    SendNotifyMessageW(HWND_BROADCAST, taskbarCreated, 0, 0);
+    g_selfBroadcast = false;
+}
+
+bool HasGuid(const GUID& g) {
+    static const GUID zero = {};
+    return memcmp(&g, &zero, sizeof(GUID)) != 0;
+}
+
+// Icons of programs that exited without removing them (Explorer drops those
+// when the mouse passes over them).
+void Prune() {
+    std::erase_if(g_icons, [](const Icon& icon) { return icon.hwnd && !IsWindow(icon.hwnd); });
+}
+
+// Non-zero when the packet was ours (and the bar should repaint). kQuery
+// replies 1 | icons << 8 | shown << 16 | bitmap failures << 24, each capped at 255.
+LRESULT OnCopyData(const COPYDATASTRUCT* cds) {
+    if (!cds || cds->dwData != kCopyDataId || !cds->lpData || cds->cbData < sizeof(Packet)) return 0;
+    Packet p;
+    memcpy(&p, cds->lpData, sizeof(p));
+    if (p.magic != kMagic || p.size != cds->cbData || p.iconW > kMaxIconPx || p.iconH > kMaxIconPx ||
+        sizeof(Packet) + static_cast<size_t>(p.iconW) * p.iconH * 4 != p.size) {
+        return 0;
+    }
+    if (p.message == kQuery) {
+        auto cap = [](size_t v) { return static_cast<LRESULT>(std::min<size_t>(v, 255)); };
+        return 1 | cap(g_icons.size()) << 8 | cap(static_cast<size_t>(g_lastShown)) << 16 |
+               cap(static_cast<size_t>(g_bitmapFailures)) << 24;
+    }
+    if (p.message == kHello) {
+        RequestIcons();
+        return true;
+    }
+    const HWND hwnd = reinterpret_cast<HWND>(static_cast<uintptr_t>(p.hwnd));
+    const bool byGuid = (p.flags & NIF_GUID) && HasGuid(p.guid);
+    auto it = std::find_if(g_icons.begin(), g_icons.end(), [&](const Icon& icon) {
+        return byGuid ? icon.hasGuid && memcmp(&icon.guid, &p.guid, sizeof(GUID)) == 0
+                      : icon.hwnd == hwnd && icon.uid == p.uid;
+    });
+    if (p.message == NIM_DELETE) {
+        if (it != g_icons.end()) g_icons.erase(it);
+        return true;
+    }
+    if (p.message == NIM_SETVERSION) {
+        if (it != g_icons.end()) it->version = p.version;
+        return true;
+    }
+    if (p.message != NIM_ADD && p.message != NIM_MODIFY) return true;
+    if (it == g_icons.end()) {
+        // NIM_ADD, or NIM_MODIFY for an icon added before the bar was listening.
+        g_icons.emplace_back();
+        it = g_icons.end() - 1;
+        it->hwnd = hwnd;
+        it->uid = p.uid;
+    }
+    Icon& icon = *it;
+    if (byGuid) {
+        icon.guid = p.guid;
+        icon.hasGuid = true;
+    }
+    if (p.flags & NIF_MESSAGE) icon.callbackMessage = p.callbackMessage;
+    if (p.flags & NIF_TIP) {
+        p.tip[127] = 0;
+        icon.tip = p.tip;
+    }
+    if ((p.flags & NIF_STATE) && (p.stateMask & NIS_HIDDEN)) icon.hidden = (p.state & NIS_HIDDEN) != 0;
+    if ((p.flags & NIF_ICON) && p.iconW && p.iconH) {
+        icon.w = p.iconW;
+        icon.h = p.iconH;
+        icon.pixels.resize(static_cast<size_t>(p.iconW) * p.iconH);
+        memcpy(icon.pixels.data(), static_cast<const uint8_t*>(cds->lpData) + sizeof(Packet),
+               icon.pixels.size() * 4);
+        icon.bitmap.Reset();
+    }
+    return true;
+}
+
+}  // namespace Tray
+
 // Paints the bar's side content (defined further down, after the weather helpers).
 namespace BarContent {
 enum Item { kLogo, kApp, kWeather, kBluetooth, kNetwork, kVolume, kBattery, kLayout, kDate, kItemCount };
@@ -5175,9 +5319,14 @@ struct Metrics {
     bool valid = false;
     bool present[kItemCount] = {};
     D2D1_RECT_F boxes[kItemCount] = {};  // full-height item boxes, client px, before animation
+    int trayCount = 0;                    // program tray icons: one status box each, right to left
+    D2D1_RECT_F trayBoxes[Tray::kMaxShown] = {};
+    HWND trayHwnd[Tray::kMaxShown] = {};
+    UINT trayUid[Tray::kMaxShown] = {};
 };
+// trayVisuals: one per tray box (Metrics::trayBoxes), same meaning as visuals.
 void Paint(ID2D1RenderTarget* rt, D2D1_SIZE_F size, const BarStatus::Model& model, bool glass, float scale,
-           const ItemVisual* visuals, Metrics* out);
+           const ItemVisual* visuals, const ItemVisual* trayVisuals, Metrics* out);
 void ReleaseTargetResources();
 }  // namespace BarContent
 
@@ -5270,6 +5419,7 @@ struct ItemAnim {
     ItemAnim() { alpha.Reset(1.0f); }
 };
 ItemAnim g_items[BarContent::kItemCount];
+ItemAnim g_trayItems[Tray::kMaxShown];  // by position in Metrics::trayBoxes
 
 // The bar's screen rect as the shell granted it. Strict leaf lock.
 std::mutex g_anchorMutex;
@@ -5352,8 +5502,13 @@ void Paint() {
             visuals[i].alpha = Clamp(g_items[i].alpha.value, 0.0f, 1.0f);
             visuals[i].dx = g_items[i].dx.value;
         }
+        BarContent::ItemVisual trayVisuals[Tray::kMaxShown];
+        for (int i = 0; i < Tray::kMaxShown; ++i) {
+            trayVisuals[i].alpha = Clamp(g_trayItems[i].alpha.value, 0.0f, 1.0f);
+            trayVisuals[i].dx = g_trayItems[i].dx.value;
+        }
         BarContent::Paint(g_target.Get(), g_target->GetSize(), BarStatus::Get(), !g_solid, g_scale, visuals,
-                          &g_metrics);
+                          trayVisuals, &g_metrics);
 
         if (g_target->EndDraw() == static_cast<HRESULT>(D2DERR_RECREATE_TARGET)) {
             BarContent::ReleaseTargetResources();
@@ -5486,6 +5641,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             InvalidateRect(hwnd, nullptr, FALSE);
             Panels::OnStatusChanged();
             return 0;
+        case WM_COPYDATA:  // tray icons from the Explorer bridge
+            if (const LRESULT handled = Tray::OnCopyData(reinterpret_cast<const COPYDATASTRUCT*>(lParam))) {
+                InvalidateRect(hwnd, nullptr, FALSE);
+                return handled;
+            }
+            return FALSE;
         case Panels::kCloseMessage:
             Panels::Close(true);
             return 0;
@@ -5581,6 +5742,11 @@ bool Create() {
         DwmBackdrop::DisableTransitions(g_bar);
     }
     BarStatus::g_notifyHwnd = g_bar;
+    // The tray bridge in Explorer sends icons as WM_COPYDATA; allow it even if
+    // this process runs at a higher integrity level. Then ask every program to
+    // (re)add its icons so the bar gets the ones that already exist.
+    ChangeWindowMessageFilterEx(g_bar, WM_COPYDATA, MSGFLT_ALLOW, nullptr);
+    Tray::RequestIcons();
     // Square corners on Windows 11 (DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_DONOTROUND).
     // Fails harmlessly on Windows 10.
     const DWORD cornerPreference = 1;
@@ -5705,11 +5871,15 @@ void Tick(float dt, const RECT& island, bool islandVisible) {
     const float L = static_cast<float>(island.left - bar.left);
     const float R = static_cast<float>(island.right - bar.left);
     bool moving = false;
-    for (int i = 0; i < BarContent::kItemCount; ++i) {
-        ItemAnim& item = g_items[i];
-        const D2D1_RECT_F& box = g_metrics.boxes[i];
-        const float side = BarContent::IsLeft(i) ? -1.0f : 1.0f;
-        const bool hide = islandVisible && g_metrics.present[i] && box.right > L - gap && box.left < R + gap;
+    // The fixed items, then the tray icons (right side), each on its own spring.
+    for (int i = 0; i < BarContent::kItemCount + Tray::kMaxShown; ++i) {
+        const bool tray = i >= BarContent::kItemCount;
+        const int t = i - BarContent::kItemCount;
+        ItemAnim& item = tray ? g_trayItems[t] : g_items[i];
+        const D2D1_RECT_F& box = tray ? g_metrics.trayBoxes[t] : g_metrics.boxes[i];
+        const bool present = tray ? t < g_metrics.trayCount : g_metrics.present[i];
+        const float side = !tray && BarContent::IsLeft(i) ? -1.0f : 1.0f;
+        const bool hide = islandVisible && present && box.right > L - gap && box.left < R + gap;
         if (hide != item.hidden) {
             item.hidden = hide;
             if (hide) {
@@ -17037,6 +17207,7 @@ ComPtr<ID2D1SolidColorBrush> g_brush;  // bound to the bar's render target
 
 void ReleaseTargetResources() {
     g_brush.Reset();
+    Tray::ReleaseBitmaps();
 }
 
 D2D1_COLOR_F WithAlpha(D2D1_COLOR_F c, float alpha) {
@@ -17057,7 +17228,7 @@ float GlyphWidth(wchar_t glyph, float px, float scale) {
 }
 
 void Paint(ID2D1RenderTarget* rt, D2D1_SIZE_F size, const BarStatus::Model& model, bool glass, float scale,
-           const ItemVisual* visuals, Metrics* out) {
+           const ItemVisual* visuals, const ItemVisual* trayVisuals, Metrics* out) {
     *out = Metrics{};
     const float k = std::max(0.05f, scale);
     if (!g_brush && FAILED(rt->CreateSolidColorBrush(Design::kBarInk, g_brush.GetAddressOf()))) return;
@@ -17132,6 +17303,28 @@ void Paint(ID2D1RenderTarget* rt, D2D1_SIZE_F size, const BarStatus::Model& mode
     if (model.hasAudio) placeRight(kVolume, statusPad * 2.0f + iconBox);
     placeRight(kNetwork, statusPad * 2.0f + iconBox);
     if (model.bluetooth >= 0) placeRight(kBluetooth, statusPad * 2.0f + iconBox);
+    // Programs' tray icons, left of the system items like third-party menu
+    // extras in macOS: the status box (8 + 16 + 8) each, 2 apart, the first one
+    // added nearest to the system items. As on a MacBook with a notch, icons
+    // that would reach the resting island (+ island-side-gap) are not shown;
+    // the ones shown hide one by one when the island grows (TopBar::Tick).
+    std::vector<Tray::Icon*> trayIcons;
+    Tray::Prune();
+    {
+        const float limit = width * 0.5f + (Design::kIdle.w * 0.5f + Design::kIslandSideGap) * k;
+        for (Tray::Icon& icon : Tray::g_icons) {
+            if (icon.hidden || icon.pixels.empty() || out->trayCount >= Tray::kMaxShown) continue;
+            const float boxW = statusPad * 2.0f + iconBox;
+            if (r - boxW < limit) break;
+            const int n = out->trayCount++;
+            out->trayBoxes[n] = D2D1::RectF(r - boxW, 0.0f, r, height);
+            out->trayHwnd[n] = icon.hwnd;
+            out->trayUid[n] = icon.uid;
+            trayIcons.push_back(&icon);
+            r -= boxW + gap;
+        }
+        Tray::g_lastShown = out->trayCount;
+    }
 
     // ── Draw: every item under its own hide transform ────────────────────────
     D2D1_MATRIX_3X2_F base;
@@ -17227,6 +17420,29 @@ void Paint(ID2D1RenderTarget* rt, D2D1_SIZE_F size, const BarStatus::Model& mode
                 glyphAt(Design::kGlyphWifi, icons16, l, iconBox, WithAlpha(ink, a * Design::kWifiGhostAlpha));
                 if (level > 0) glyphAt(Design::kGlyphWifiLevel[level - 1], icons16, l, iconBox, WithAlpha(ink, a));
             }
+        }
+    }
+    if (out->trayCount > 0) {
+        const D2D1_BITMAP_PROPERTIES props =
+            D2D1::BitmapProperties(D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED));
+        for (int i = 0; i < out->trayCount; ++i) {
+            const ItemVisual& v = trayVisuals[i];
+            if (v.alpha <= 0.003f) continue;
+            const D2D1_RECT_F& box = out->trayBoxes[i];
+            const float sc = Design::kBarItemsHiddenScale + (1.0f - Design::kBarItemsHiddenScale) * v.alpha;
+            rt->SetTransform(D2D1::Matrix3x2F::Scale(sc, sc, D2D1::Point2F((box.left + box.right) * 0.5f, cy)) *
+                             D2D1::Matrix3x2F::Translation(v.dx, 0.0f) * base);
+            const float a = v.alpha;
+            Tray::Icon& icon = *trayIcons[i];
+            if (!icon.bitmap && FAILED(rt->CreateBitmap(D2D1::SizeU(icon.w, icon.h), icon.pixels.data(), icon.w * 4,
+                                                        &props, icon.bitmap.GetAddressOf()))) {
+                ++Tray::g_bitmapFailures;
+                continue;
+            }
+            const float l = std::round(out->trayBoxes[i].left + statusPad);
+            const float t = std::round(cy - iconBox * 0.5f);
+            rt->DrawBitmap(icon.bitmap.Get(), D2D1::RectF(l, t, l + iconBox, t + iconBox), a,
+                           D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
         }
     }
     if (out->present[kBluetooth]) {
@@ -29327,6 +29543,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lPara
     }
 
     if (msg == g_taskbarCreatedMessage && g_taskbarCreatedMessage != 0) {
+        if (Tray::g_selfBroadcast) return 0;  // our own request for tray icons, not an Explorer restart
         Wh_Log(L"TaskbarCreated received; re-registering shell hook window.");
         DeregisterShellHookWindow(hwnd);
         RegisterShellHookWindow(hwnd);

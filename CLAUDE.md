@@ -39,13 +39,15 @@
 | `upstream` | https://github.com/devcode90/Dynamic-Island-for-Windows |
 | Исходник мода | `dynamic-island-for-windows.wh.cpp` (один файл) |
 | Мод в Windhawk | `@id dynamic-island-topbar-dev`, имя «Dynamic Island TopBar (dev)», ключ `local@dynamic-island-topbar-dev` |
+| Мост трея | `dynamic-island-tray-bridge.wh.cpp`, `@id dynamic-island-tray-bridge-dev`, ключ `local@dynamic-island-tray-bridge-dev`, работает внутри `explorer.exe` |
 | Окончания строк | LF в рабочей копии (`autocrlf=true`, не делать `git stash`, он переписывает файл в CRLF) |
 
 ## Сборка и установка
 
 ```powershell
-pwsh -File .\deploy.ps1             # собрать (32 и 64 бит) и поставить в Windhawk, перезапустить мод
-pwsh -File .\deploy.ps1 -BuildOnly  # только собрать
+pwsh -File .\deploy.ps1                # собрать оба мода (32 и 64 бит), поставить в Windhawk, перезапустить
+pwsh -File .\deploy.ps1 -Mod topbar    # только бар (или -Mod tray — только мост)
+pwsh -File .\deploy.ps1 -BuildOnly     # только собрать
 ```
 
 Предупреждения `deploy.ps1` не показывает. Проверка: `clang++ -fsyntax-only` с теми же флагами для `x86_64-w64-mingw32` и `i686-w64-mingw32`.
@@ -64,6 +66,7 @@ pwsh -File .\deploy.ps1 -BuildOnly  # только собрать
   - там же `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)`: смена активного окна (Alt+Tab, Win, Win+D) закрывает панель; первые 300 мс после открытия не считаются;
   - **`Material`** — стекло по `materials.panel`: перед показом снимается монитор, область под панелью размывается на CPU (σ30, три box-прохода), насыщенность 1.8, заливка `panel-bg` 0.40, над светлым фоном заливка уплотняется до `readableAlpha` 0.70;
   - клик по бару при открытом «Пуске», быстрых настройках или центре уведомлений: мод нажимает Esc (`SetForegroundWindow` Windows при «Пуске» запрещает) и открывает панель, когда системное окно спрятано.
+- **`namespace Tray`** — значки программ из трея. Мост в Explorer ловит `WM_COPYDATA` (`dwData = 1`) к `Shell_TrayWnd` хуком `WH_CALLWNDPROC` (только чтение), растеризует значок сразу и шлёт пакет (`'DITR'`, формат `Packet` одинаковый в обоих файлах) в окно бара из своего потока. Бар при старте и на «hello» моста рассылает `TaskbarCreated`, чтобы программы заново прислали значки; свою рассылку бар игнорирует. Пакет `kQuery` возвращает счётчики для тестов. Каждый значок — отдельный пункт со своей пружиной `bar.items`; не помещающиеся справа от острова в покое не показываются.
 - **Вырез:** блок «Bar notch (design/components.md "Вырез")» в цикле отрисовки, `DrawNotchShell`, `DrawNotchTime`, `DrawVizBars`, `DrawNotchNotification`, `DrawDesignPlayer`.
 
 ## Что осталось
