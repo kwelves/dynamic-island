@@ -259,8 +259,8 @@ function Install-OneMod($Item, $Layout, $Mods, $Log) {
                 while ((Get-ToolModProcess $Item.Key) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
                 if (Get-ToolModProcess $Item.Key) { $Log.Add('Старый процесс мода не завершился за 15 с, продолжаю.') }
             } else {
-                while ((Get-ExplorerModDlls $Item.Key).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
-                if ((Get-ExplorerModDlls $Item.Key).Count -gt 0) { $Log.Add('Старая DLL не выгрузилась из explorer.exe за 15 с, продолжаю.') }
+                while (@(Get-ExplorerModDlls $Item.Key).Count -gt 0 -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 250 }
+                if (@(Get-ExplorerModDlls $Item.Key).Count -gt 0) { $Log.Add('Старая DLL не выгрузилась из explorer.exe за 15 с, продолжаю.') }
             }
         }
 

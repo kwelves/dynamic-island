@@ -5188,6 +5188,10 @@ DWORD WINAPI ThreadProc(void*) {
 // as WM_COPYDATA to the bar window, with the icon already rasterised. Explorer
 // keeps handling the icons itself. The wire format below must match the bridge.
 // Render thread only: the bar window, which receives the data, lives there.
+namespace TopBar {
+LRESULT TrayIconRect(HWND hwnd, UINT uid, int corner);
+}
+
 namespace Tray {
 
 constexpr ULONG_PTR kCopyDataId = 0x52544944;  // 'DITR'
@@ -5195,6 +5199,7 @@ constexpr uint32_t kMagic = 0x31544944;        // 'DIT1'
 constexpr uint32_t kHello = 0xFFFFFFFF;        // the bridge (re)started
 constexpr uint32_t kQuery = 0xFFFFFFFE;        // diagnostics: the reply packs the counters below
 constexpr uint32_t kDump = 0xFFFFFFFD;         // diagnostics: write the icon list to %TEMP%
+constexpr uint32_t kRect = 0xFFFFFFFC;         // bridge: Shell_NotifyIconGetRect, version = 1 top-left, 2 size
 constexpr uint32_t kMaxIconPx = 64;
 constexpr int kMaxShown = 32;
 
@@ -5500,6 +5505,17 @@ LRESULT OnCopyData(const COPYDATASTRUCT* cds) {
         DumpIcons();
         return 1;
     }
+    if (p.message == kRect) {  // the icon's corner on the bar, or 0 so Explorer answers
+        const HWND owner = reinterpret_cast<HWND>(static_cast<uintptr_t>(p.hwnd));
+        const bool guid = HasGuid(p.guid);
+        for (const Icon& icon : g_icons) {
+            if (guid ? icon.hasGuid && memcmp(&icon.guid, &p.guid, sizeof(GUID)) == 0
+                     : icon.hwnd == owner && icon.uid == p.uid) {
+                return TopBar::TrayIconRect(icon.hwnd, icon.uid, static_cast<int>(p.version));
+            }
+        }
+        return 0;
+    }
     if (p.message == kHello) {
         RequestIcons();
         return true;
@@ -5668,6 +5684,31 @@ ItemAnim g_items[BarContent::kItemCount];
 ItemAnim g_trayItems[Tray::kMaxShown];  // by position in Metrics::trayBoxes
 int g_trayPress = -1;          // tray icon under a pressed button
 bool g_trayPressRight = false;
+
+// Shell_NotifyIconGetRect for the bridge, about the icon's status box on the bar
+// (for an icon in the overflow menu, the chevron's): 1 asks for its top-left
+// corner in screen px, 2 for its size (shell32 adds it to the corner, measured).
+// 0 when the bar has neither (Explorer answers then).
+LRESULT TrayIconRect(HWND hwnd, UINT uid, int corner) {
+    if (!g_bar || !g_metrics.valid || (corner != 1 && corner != 2)) return 0;
+    const D2D1_RECT_F* box = nullptr;
+    for (int i = 0; i < g_metrics.trayCount; ++i) {
+        if (g_metrics.trayHwnd[i] == hwnd && g_metrics.trayUid[i] == uid && !g_trayItems[i].hidden) {
+            box = &g_metrics.trayBoxes[i];
+        }
+    }
+    if (!box && g_metrics.present[BarContent::kTrayMore] && !g_items[BarContent::kTrayMore].hidden &&
+        std::find(Tray::g_overflow.begin(), Tray::g_overflow.end(), std::make_pair(hwnd, uid)) != Tray::g_overflow.end()) {
+        box = &g_metrics.boxes[BarContent::kTrayMore];
+    }
+    RECT window = {};
+    if (!box || !GetWindowRect(g_bar, &window)) return 0;
+    const int left = window.left + static_cast<int>(std::lround(box->left));
+    const int width = static_cast<int>(std::lround(box->right - box->left));
+    const int x = corner == 1 ? left : width;
+    const int y = corner == 1 ? window.top : window.bottom - window.top;
+    return static_cast<LRESULT>(static_cast<int32_t>(MAKELONG(static_cast<WORD>(x), static_cast<WORD>(y))));
+}
 
 // The tray icon under client x, or -1. An icon hidden by the island takes no clicks.
 int TrayHit(float x) {
@@ -6789,6 +6830,9 @@ HANDLE g_inputThread = nullptr;
 DWORD g_inputThreadId = 0;
 std::atomic<bool> g_hooksWanted{false};
 std::atomic<bool> g_menuKeys{false};  // a menu is open: ↑ / ↓ / Enter belong to it too
+// A program's own menu opened from the overflow menu: its process. The keyboard,
+// clicks inside its windows and it becoming active belong to that menu then.
+std::atomic<DWORD> g_appMenuPid{0};
 HHOOK g_mouseHook = nullptr;
 HHOOK g_keyHook = nullptr;
 HWINEVENTHOOK g_foregroundHook = nullptr;
@@ -6811,7 +6855,10 @@ LRESULT CALLBACK MouseHookProc(int code, WPARAM wParam, LPARAM lParam) {
         }
         RECT bar = {};
         const bool onBar = TopBar::GetAnchorRect(&bar) && PtInRect(&bar, pt);
-        if (!PtInRect(&body, pt) && !onBar) {
+        DWORD pid = 0;
+        const DWORD menuPid = g_appMenuPid.load(std::memory_order_relaxed);
+        if (menuPid) GetWindowThreadProcessId(WindowFromPoint(pt), &pid);
+        if (!PtInRect(&body, pt) && !onBar && (!menuPid || pid != menuPid)) {
             if (HWND h = BarStatus::g_notifyHwnd.load()) PostMessageW(h, kCloseMessage, 0, 0);
         }
     }
@@ -6822,6 +6869,7 @@ LRESULT CALLBACK MouseHookProc(int code, WPARAM wParam, LPARAM lParam) {
 // Esc closes, ← / → move to the neighbouring item. Other keys pass through.
 LRESULT CALLBACK KeyHookProc(int code, WPARAM wParam, LPARAM lParam) {
     if (code == HC_ACTION && g_hooksWanted.load(std::memory_order_relaxed) &&
+        !g_appMenuPid.load(std::memory_order_relaxed) &&  // a program's menu is open: its keys
         (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN)) {
         const DWORD vk = reinterpret_cast<KBDLLHOOKSTRUCT*>(lParam)->vkCode;
         if (vk == VK_ESCAPE || vk == VK_LEFT || vk == VK_RIGHT) {
@@ -6842,9 +6890,14 @@ LRESULT CALLBACK KeyHookProc(int code, WPARAM wParam, LPARAM lParam) {
 // Another window became active (Alt+Tab, Win, Win+D, an app taking focus):
 // the panel closes, as a macOS menu does. Our own process (bar, island, its
 // context menu) is skipped by WINEVENT_SKIPOWNPROCESS.
-void CALLBACK ForegroundProc(HWINEVENTHOOK, DWORD, HWND, LONG, LONG, DWORD, DWORD) {
+void CALLBACK ForegroundProc(HWINEVENTHOOK, DWORD, HWND hwnd, LONG, LONG, DWORD, DWORD) {
     if (!g_hooksWanted.load(std::memory_order_relaxed)) return;
     if (GetTickCount64() - g_openTick.load(std::memory_order_relaxed) < kForegroundGraceMs) return;
+    if (const DWORD menuPid = g_appMenuPid.load(std::memory_order_relaxed)) {
+        DWORD pid = 0;
+        GetWindowThreadProcessId(hwnd, &pid);
+        if (pid == menuPid) return;  // the program activates itself to show its menu
+    }
     if (HWND h = BarStatus::g_notifyHwnd.load()) PostMessageW(h, kCloseMessage, 0, 0);
 }
 
@@ -7008,6 +7061,11 @@ struct State {
     double radioPendingUntil = 0.0;
     int calYear = 0;
     int calMonth = 0;
+    int appMenuRow = -1;           // overflow menu: the row whose program's own menu is open
+    bool appMenuSeen = false;      // that menu has appeared
+    double appMenuStart = 0.0;
+    double appMenuPoll = 0.0;
+    std::vector<HWND> appMenuBefore;  // the program's menu-like windows before the click
     int pendingItem = -1;          // opens once a dismissed shell flyout is gone
     HWND pendingFlyout = nullptr;
     double pendingUntil = 0.0;
@@ -7218,7 +7276,45 @@ void BuildMenu() {
                        std::ceil(Design::kMenuTextX + titleW + Design::kMenuTitleGap + keyW + Design::kMenuShortcutX));
 }
 
+// Visible menu-like windows of a process: Win32 menus (#32768) and caption-less
+// topmost or tool popups (how Qt, Electron and others draw theirs).
+struct MenuWindowSearch {
+    DWORD pid;
+    std::vector<HWND> windows;
+};
+
+BOOL CALLBACK CollectMenuWindow(HWND hwnd, LPARAM param) {
+    auto* search = reinterpret_cast<MenuWindowSearch*>(param);
+    DWORD owner = 0;
+    GetWindowThreadProcessId(hwnd, &owner);
+    if (owner != search->pid || !IsWindowVisible(hwnd)) return TRUE;
+    wchar_t cls[16] = {};
+    GetClassNameW(hwnd, cls, ARRAYSIZE(cls));
+    const LONG style = GetWindowLongW(hwnd, GWL_STYLE);
+    const LONG ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
+    if (wcscmp(cls, L"#32768") == 0 ||
+        ((style & WS_POPUP) && (style & WS_CAPTION) != WS_CAPTION && (ex & (WS_EX_TOPMOST | WS_EX_TOOLWINDOW)))) {
+        search->windows.push_back(hwnd);
+    }
+    return TRUE;
+}
+
+std::vector<HWND> MenuWindows(DWORD pid) {
+    MenuWindowSearch search{pid, {}};
+    if (pid) EnumWindows(CollectMenuWindow, reinterpret_cast<LPARAM>(&search));
+    return search.windows;
+}
+
+void EndAppMenu() {
+    if (g.appMenuRow < 0 && !g_appMenuPid.load()) return;
+    g_appMenuPid.store(0);
+    g.appMenuRow = -1;
+    g.appMenuBefore.clear();
+    g.dirty = true;
+}
+
 void BuildRows() {
+    EndAppMenu();
     g.rows.clear();
     g_iconBitmaps.clear();  // keyed by pixel address: never reuse one for new rows
     g.menu = IsMenu(g.item);
@@ -8091,6 +8187,7 @@ void CancelPending() {
 
 void Close(bool animate) {
     CancelPending();
+    EndAppMenu();
     if (!g.open) return;
     g.open = false;
     g_menuKeys = false;
@@ -8512,7 +8609,7 @@ void OnIslandExpanded() {
 }
 
 bool Animating() {
-    return g.pendingItem >= 0 || g.closing || g.hlOffStart >= 0.0 || g.trackStart >= 0.0 ||
+    return g.pendingItem >= 0 || g.appMenuRow >= 0 || g.closing || g.hlOffStart >= 0.0 || g.trackStart >= 0.0 ||
            (g.open && (g.openSpring.value != g.openSpring.target || g.fadeSpring.value != g.fadeSpring.target ||
                        g.knob.value != g.knob.target || g.slider.value != g.slider.target || g.dirty));
 }
@@ -8523,6 +8620,23 @@ void Tick() {
     const double now = NowSeconds();
     const float dt = g.lastTick < 0.0 ? 0.0f : Clamp(static_cast<float>(now - g.lastTick), 0.0f, 0.05f);
     g.lastTick = now;
+    // A program's own menu from the overflow menu: once it has appeared and is
+    // gone again (an item chosen, a click elsewhere, Esc), the overflow menu
+    // closes too; a program that shows no menu within 2 s just ends the mode.
+    if (g.open && g.appMenuRow >= 0 && now - g.appMenuPoll >= 0.1) {
+        g.appMenuPoll = now;
+        bool shown = false;
+        for (HWND hwnd : MenuWindows(g_appMenuPid.load())) {
+            if (std::find(g.appMenuBefore.begin(), g.appMenuBefore.end(), hwnd) == g.appMenuBefore.end()) shown = true;
+        }
+        if (shown) {
+            g.appMenuSeen = true;
+        } else if (g.appMenuSeen) {
+            Close(true);
+        } else if (now - g.appMenuStart > 2.0) {
+            EndAppMenu();
+        }
+    }
     if (g.pendingItem >= 0 && (FlyoutGone(g.pendingFlyout) || now >= g.pendingUntil)) {
         const int item = g.pendingItem;
         g.pendingItem = -1;
@@ -8618,7 +8732,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_MOUSEACTIVATE:
             return MA_NOACTIVATE;
         case WM_MOUSEMOVE: {
-            if (!g.open || g.blinkRow >= 0) return 0;
+            if (!g.open || g.blinkRow >= 0 || g.appMenuRow >= 0) return 0;  // the row with an open program menu stays lit
             if (!g.mouseTracked) {
                 TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
                 g.mouseTracked = TrackMouseEvent(&tme) != FALSE;
@@ -8653,6 +8767,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_MOUSELEAVE:
             g.mouseTracked = false;
+            if (g.appMenuRow >= 0) return 0;
             if (g.hover >= 0 || g.press >= 0) {
                 g.hover = g.press = -1;
                 g.hoverPart = 0;
@@ -8720,12 +8835,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         case WM_RBUTTONDOWN:
             return 0;
-        case WM_RBUTTONUP: {  // overflow tray menu: the program's own menu
+        case WM_RBUTTONUP: {  // overflow tray menu: the program's own menu, ours stays open meanwhile
             const int i = RowAt(uy);
             if (g.open && g.blinkRow < 0 && i >= 0 && i < static_cast<int>(g.rows.size()) &&
                 g.rows[i].action == kTrayIcon) {
                 const Row row = g.rows[i];
-                Close(true);
+                EndAppMenu();
+                DWORD pid = 0;
+                GetWindowThreadProcessId(row.trayHwnd, &pid);
+                g.appMenuRow = i;
+                g.hover = i;
+                g.press = -1;
+                g.appMenuBefore = MenuWindows(pid);
+                g.appMenuSeen = false;
+                g.appMenuStart = g.appMenuPoll = NowSeconds();
+                g.dirty = true;
+                g_appMenuPid.store(pid);
                 Tray::Click(row.trayHwnd, row.trayUid, true);
             }
             return 0;

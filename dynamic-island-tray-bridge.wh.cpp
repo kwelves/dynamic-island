@@ -1,11 +1,11 @@
 // ==WindhawkMod==
 // @id              dynamic-island-tray-bridge-dev
 // @name            Dynamic Island TopBar: tray bridge (dev)
-// @description     Copies notification area (tray) icons from Explorer to the Dynamic Island TopBar. Read-only: Explorer keeps handling every icon as usual.
-// @version         0.1.0
+// @description     Copies notification area (tray) icons from Explorer to the Dynamic Island TopBar and tells programs where their icon is on the bar. Explorer keeps handling every icon as usual.
+// @version         0.2.0
 // @author          Erkin
 // @include         explorer.exe
-// @compilerOptions -luser32 -lgdi32
+// @compilerOptions -luser32 -lgdi32 -lcomctl32
 // @license         MIT
 // ==/WindhawkMod==
 
@@ -13,23 +13,33 @@
 /*
 # Dynamic Island TopBar: tray bridge
 
-Companion of the Dynamic Island TopBar mod. Inside Explorer it only *watches*
-the messages programs send to the taskbar's notification area
-(`Shell_NotifyIcon` → `WM_COPYDATA` to `Shell_TrayWnd`) and copies each icon
-(id, tooltip, state and its picture) to the bar window. It never changes,
-blocks or answers those messages; Explorer handles them exactly as before.
+Companion of the Dynamic Island TopBar mod. Inside Explorer it *watches* the
+messages programs send to the taskbar's notification area (`Shell_NotifyIcon`
+→ `WM_COPYDATA` to `Shell_TrayWnd`) and copies each icon (id, tooltip, state
+and its picture) to the bar window. It never changes or blocks those messages;
+Explorer handles them exactly as before.
+
+It answers one question itself: `Shell_NotifyIconGetRect` ("where is my
+icon?", `WM_COPYDATA` with `dwData = 3`). The answer is the icon's place on the
+bar (the overflow chevron for icons in its menu), so programs open their
+windows under it. When the bar does not know the icon, Explorer answers.
 
 How it stays small and safe:
 - one `WH_CALLWNDPROC` hook on the taskbar's thread, which can only observe;
+- one window subclass (`SetWindowSubclass`) on `Shell_TrayWnd` that handles only
+  `dwData = 3` and passes every other message on unchanged; it asks the bar
+  with a 200 ms timeout and falls back to Explorer;
 - every buffer is size-checked before it is read;
 - the icon picture is copied while the sender is still waiting (it may destroy
   the icon right after), everything else is sent to the bar from a separate
   thread with a timeout, so neither Explorer nor the program waits for the bar;
-- the queue is bounded; on unload the hook is removed first.
+- the queue is bounded; on unload the subclass and then the hook are removed
+  first, and running calls are waited for.
 */
 // ==/WindhawkModReadme==
 
 #include <windows.h>
+#include <commctrl.h>
 
 #include <atomic>
 #include <cstdint>
@@ -44,6 +54,7 @@ namespace {
 constexpr ULONG_PTR kCopyDataId = 0x52544944;  // 'DITR'
 constexpr uint32_t kMagic = 0x31544944;        // 'DIT1'
 constexpr uint32_t kHello = 0xFFFFFFFF;        // message: the bridge (re)started, please re-request icons
+constexpr uint32_t kRect = 0xFFFFFFFC;         // message: where is this icon? version = 1 top-left, 2 size
 constexpr int kMaxIconPx = 64;
 
 #pragma pack(push, 1)
@@ -90,11 +101,27 @@ struct ShellTrayData {
     DWORD dwMessage;
     NotifyIconData32 nid;
 };
+// Shell_NotifyIconGetRect (WM_COPYDATA, dwData = 3). dwMessage 1 asks for the
+// top-left corner, 2 for the size (shell32 adds it to the corner); the reply is
+// MAKELPARAM(x, y).
+struct IconIdentifier {
+    DWORD magic;
+    DWORD dwMessage;
+    DWORD cbSize;
+    DWORD padding;
+    DWORD hWnd;
+    UINT uID;
+    GUID guidItem;
+};
 #pragma pack(pop)
 
 constexpr size_t kMaxQueue = 256;
 
 HWND g_tray = nullptr;
+constexpr UINT_PTR kSubclassId = 0x44495452;  // 'DITR'
+std::atomic<bool> g_subclassed{false};
+std::atomic<int> g_inSubclass{0};
+UINT g_unsubclassMessage = 0;  // sent to Shell_TrayWnd on unload: remove the subclass on its own thread
 HHOOK g_hook = nullptr;
 HANDLE g_thread = nullptr;
 HANDLE g_wake = nullptr;
@@ -213,11 +240,68 @@ std::vector<uint8_t> MakePacket(uint32_t message, const NotifyIconData32* nid) {
     return buffer;
 }
 
-// Observes only: never changes the message, always passes it on.
+HWND FindBar() {
+    return FindWindowW(L"Windhawk.DynamicIslandTopBar", nullptr);
+}
+
+// Asks the bar where the icon is. 0: the bar does not know it (or is not running).
+LRESULT AskBarForRect(const IconIdentifier& id) {
+    HWND bar = FindBar();
+    if (!bar) return 0;
+    Packet p = {};
+    p.magic = kMagic;
+    p.size = sizeof(Packet);
+    p.message = kRect;
+    p.hwnd = id.hWnd;
+    p.uid = id.uID;
+    p.guid = id.guidItem;
+    p.flags = NIF_GUID;  // the bar ignores an all-zero GUID
+    p.version = id.dwMessage;
+    COPYDATASTRUCT cds = {};
+    cds.dwData = kCopyDataId;
+    cds.cbData = sizeof(p);
+    cds.lpData = &p;
+    DWORD_PTR result = 0;
+    if (!SendMessageTimeoutW(bar, WM_COPYDATA, 0, reinterpret_cast<LPARAM>(&cds), SMTO_ABORTIFHUNG | SMTO_NORMAL, 200,
+                             &result)) {
+        return 0;
+    }
+    return static_cast<LRESULT>(static_cast<int32_t>(result));  // the bar is 32-bit: MAKELPARAM in the low half
+}
+
+// Handles Shell_NotifyIconGetRect only; everything else goes on unchanged.
+LRESULT CALLBACK TraySubclassProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, UINT_PTR, DWORD_PTR) {
+    g_inSubclass.fetch_add(1);
+    LRESULT result = 0;
+    bool handled = false;
+    if (msg == g_unsubclassMessage && g_unsubclassMessage) {
+        RemoveWindowSubclass(hwnd, TraySubclassProc, kSubclassId);
+        g_subclassed.store(false);
+        handled = true;
+    } else if (msg == WM_COPYDATA && lParam && !g_stop.load(std::memory_order_relaxed)) {
+        const COPYDATASTRUCT* cds = reinterpret_cast<const COPYDATASTRUCT*>(lParam);
+        if (cds->dwData == 3 && cds->lpData && cds->cbData >= sizeof(IconIdentifier)) {
+            const IconIdentifier* id = static_cast<const IconIdentifier*>(cds->lpData);
+            if (id->dwMessage == 1 || id->dwMessage == 2) {
+                result = AskBarForRect(*id);
+                handled = result != 0;
+            }
+        }
+    }
+    if (!handled) result = DefSubclassProc(hwnd, msg, wParam, lParam);
+    g_inSubclass.fetch_sub(1);
+    return result;
+}
+
+// Observes only: never changes the message, always passes it on. The first
+// call on the taskbar's thread also installs the subclass (it must be done there).
 LRESULT CALLBACK CallWndProc(int code, WPARAM wParam, LPARAM lParam) {
     g_inHook.fetch_add(1);
     if (code == HC_ACTION && !g_stop.load(std::memory_order_relaxed)) {
         const CWPSTRUCT* msg = reinterpret_cast<const CWPSTRUCT*>(lParam);
+        if (msg && msg->hwnd == g_tray && !g_subclassed.load()) {
+            g_subclassed.store(SetWindowSubclass(g_tray, TraySubclassProc, kSubclassId, 0) != FALSE);
+        }
         if (msg && msg->message == WM_COPYDATA && msg->hwnd == g_tray && msg->lParam) {
             const COPYDATASTRUCT* cds = reinterpret_cast<const COPYDATASTRUCT*>(msg->lParam);
             if (cds->dwData == 1 && cds->lpData && cds->cbData >= sizeof(ShellTrayData)) {
@@ -238,9 +322,6 @@ LRESULT CALLBACK CallWndProc(int code, WPARAM wParam, LPARAM lParam) {
     return result;
 }
 
-HWND FindBar() {
-    return FindWindowW(L"Windhawk.DynamicIslandTopBar", nullptr);
-}
 
 void Send(HWND bar, const std::vector<uint8_t>& packet) {
     COPYDATASTRUCT cds = {};
@@ -299,6 +380,7 @@ DWORD WINAPI SenderThread(void*) {
 }  // namespace
 
 BOOL Wh_ModInit() {
+    g_unsubclassMessage = RegisterWindowMessageW(L"DynamicIslandTrayBridgeUnsubclass");
     g_wake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     if (!g_wake) return FALSE;
     g_thread = CreateThread(nullptr, 0, SenderThread, nullptr, 0, nullptr);
@@ -307,9 +389,14 @@ BOOL Wh_ModInit() {
 
 void Wh_ModUninit() {
     g_stop.store(true);
-    if (g_hook) UnhookWindowsHookEx(g_hook);  // first: no new hook calls
+    // The subclass is removed on the taskbar's own thread, then the hook.
+    if (g_subclassed.load() && g_tray) {
+        DWORD_PTR ignored = 0;
+        SendMessageTimeoutW(g_tray, g_unsubclassMessage, 0, 0, SMTO_ABORTIFHUNG | SMTO_NORMAL, 2000, &ignored);
+    }
+    if (g_hook) UnhookWindowsHookEx(g_hook);  // no new hook calls
     g_hook = nullptr;
-    for (int i = 0; i < 100 && g_inHook.load() > 0; ++i) Sleep(10);  // let a running call finish
+    for (int i = 0; i < 100 && (g_inHook.load() > 0 || g_inSubclass.load() > 0); ++i) Sleep(10);  // running calls finish
     if (g_wake) SetEvent(g_wake);
     if (g_thread) {
         WaitForSingleObject(g_thread, 3000);
