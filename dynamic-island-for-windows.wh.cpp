@@ -2083,9 +2083,14 @@ bool CalendarTabEnabled(const Settings& settings) {
     return !settings.topBarEnabled;
 }
 
+// Likewise the weather: with the top bar on it is the bar's weather panel.
+bool WeatherTabEnabled(const Settings& settings) {
+    return settings.weather && !settings.topBarEnabled;
+}
+
 int ActiveTabCount(const Settings& settings) {
     int count = CalendarTabEnabled(settings) ? 2 : 1;  // primary (media or clock) + calendar?
-    if (settings.weather) ++count;
+    if (WeatherTabEnabled(settings)) ++count;
     if (settings.hardwareMonitorModule) ++count;
     if (settings.fileTrayModule) ++count;
     if (settings.lyrics && g_lyricsTabAvailable.load(std::memory_order_relaxed)) ++count;
@@ -2115,14 +2120,14 @@ int HardwareMonitorTabIndex(const Settings& settings) {
     if (!settings.hardwareMonitorModule) {
         return -1;
     }
-    return 1 + (CalendarTabEnabled(settings) ? 1 : 0) + (settings.weather ? 1 : 0) + MediaTabIndex(settings);
+    return 1 + (CalendarTabEnabled(settings) ? 1 : 0) + (WeatherTabEnabled(settings) ? 1 : 0) + MediaTabIndex(settings);
 }
 
 int FileTrayTabIndex(const Settings& settings) {
     if (!settings.fileTrayModule) {
         return -1;
     }
-    return 1 + (CalendarTabEnabled(settings) ? 1 : 0) + (settings.weather ? 1 : 0) +
+    return 1 + (CalendarTabEnabled(settings) ? 1 : 0) + (WeatherTabEnabled(settings) ? 1 : 0) +
            (settings.hardwareMonitorModule ? 1 : 0) + MediaTabIndex(settings);
 }
 
@@ -2312,6 +2317,8 @@ const wchar_t* Loc(const wchar_t* english) {
         {L"Locating...", {nullptr, L"Localisation...", L"Ubicando...", L"Standort...", L"Localizando...", L"Localizzazione...", L"Определение...", L"Konum...", L"स्थान...", L"定位中...", L"位置情報...", L"위치 확인 중..."}},
         {L"Wind", {nullptr, L"Vent", L"Viento", L"Wind", L"Vento", L"Vento", L"Ветер", L"Rüzgar", L"हवा", L"风速", L"風", L"바람"}},
         {L"Feels Like", {nullptr, L"Ressenti", L"Sensación", L"Gefühlt", L"Sensação", L"Percepita", L"Ощущается", L"Hissedilen", L"महसूस", L"体感", L"体感", L"체감"}},
+        {L"km/h", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"км/ч", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"mph", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"миль/ч", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"Humidity", {nullptr, L"Humidité", L"Humedad", L"Luftfeuchte", L"Umidade", L"Umidità", L"Влажность", L"Nem", L"नमी", L"湿度", L"湿度", L"습도"}},
         {L"Drag files here", {nullptr, L"Déposez des fichiers ici", L"Arrastra archivos aquí", L"Dateien hierher ziehen", L"Arraste arquivos aqui", L"Trascina i file qui", L"Перетащите файлы сюда", L"Dosyaları buraya sürükleyin", L"फ़ाइलें यहाँ खींचें", L"将文件拖到此处", L"ここにファイルをドラッグ", L"여기에 파일을 끌어다 놓으세요"}},
         {L"No devices", {nullptr, L"Aucun appareil", L"Sin dispositivos", L"Keine Geräte", L"Nenhum dispositivo", L"Nessun dispositivo", L"Нет устройств", L"Cihaz yok", L"कोई डिवाइस नहीं", L"无设备", L"デバイスなし", L"장치 없음"}},
@@ -4533,7 +4540,7 @@ inline wchar_t VolumeGlyph(int pct, bool muted) {
 // typography.styles
 enum class Text {
     BarApp, BarMenu, BarLayout, IslandTime, IslandNotifyTitle, IslandNotifyBody, IslandMeta,
-    IslandTitle, IslandSub, PanelTitle, PanelSection, PanelRow, PanelCaption, Count
+    IslandTitle, IslandSub, PanelTitle, PanelSection, PanelRow, PanelCaption, PanelHero, Count
 };
 struct TextSpec {
     bool small;  // "Segoe UI Variable Small" instead of "... Text"
@@ -4557,7 +4564,12 @@ constexpr TextSpec kText[static_cast<int>(Text::Count)] = {
     {true, 11.0f, 14.0f, DWRITE_FONT_WEIGHT_SEMI_BOLD, 0.06f, false},    // panel-section
     {false, 13.0f, 16.0f, DWRITE_FONT_WEIGHT_NORMAL, -0.08f, false},     // panel-row
     {true, 11.0f, 14.0f, DWRITE_FONT_WEIGHT_NORMAL, 0.06f, false},       // panel-caption
+    {false, 34.0f, 40.0f, DWRITE_FONT_WEIGHT_LIGHT, -0.4f, true},        // not in design/: weather panel temperature
 };
+// Weather panel (not in design/, agreed deviation): the condition glyph beside
+// the big temperature, and the hero row (temperature line + description + 6).
+constexpr float kWeatherHeroGlyph = 28.0f;
+constexpr float kWeatherHeroH = 40.0f + 16.0f + 6.0f;
 
 }  // namespace Design
 
@@ -5672,6 +5684,8 @@ std::atomic<uint64_t> g_volumeFlyoutQuietUntil{0};
 
 bool IconToPixels(HICON icon, UINT size, BitmapPixels* outPixels);  // defined further down
 std::wstring PercentEncodeUtf8(const std::wstring& text);            // defined further down
+
+bool WeatherIsClear(int code);  // defined with the weather helpers
 
 // Click-to-open panels under the bar (defined after TopBar).
 namespace Panels {
@@ -7157,7 +7171,8 @@ void StopThreads() {
 }
 
 // ── Panel model ──────────────────────────────────────────────────────────────
-enum class RowKind { Header, Slider, Section, Caption, Item, Sep, Link, CalHeader, CalWeekdays, CalWeek, MenuItem, MenuSep };
+enum class RowKind { Header, Slider, Section, Caption, Item, Sep, Link, CalHeader, CalWeekdays, CalWeek, MenuItem, MenuSep,
+                     WeatherHero, KeyValue };
 enum Action {
     kNoAction, kSetOutput, kOpenSoundSettings, kOpenBluetoothSettings, kOpenDateSettings,
     kConnectWifi, kOpenWifiSettings, kOpenBatterySettings,
@@ -7214,6 +7229,10 @@ float RowHeight(RowKind kind) {
             return Design::kMenuRowH;
         case RowKind::MenuSep:
             return Design::kHairline + Design::kSepMarginY * 2.0f;
+        case RowKind::WeatherHero:
+            return Design::kWeatherHeroH;
+        case RowKind::KeyValue:  // a label / value line, link height
+            return Design::kPanelLinkH;
     }
     return 0.0f;
 }
@@ -7279,12 +7298,12 @@ State g;
 // components.md: Control Center panels for Wi-Fi, Bluetooth, Sound, Battery (and
 // the calendar); NSMenu-style menus for the logo, the weather and the layout.
 bool IsMenu(int item) {
-    return item == BarContent::kLogo || item == BarContent::kWeather || item == BarContent::kLayout ||
-           item == BarContent::kTrayMore;
+    return item == BarContent::kLogo || item == BarContent::kLayout || item == BarContent::kTrayMore;
 }
 
 bool HasPanel(int item) {
     return item == BarContent::kVolume || item == BarContent::kBluetooth || item == BarContent::kDate ||
+           item == BarContent::kWeather ||
            item == BarContent::kNetwork || item == BarContent::kBattery || IsMenu(item);
 }
 
@@ -7404,30 +7423,6 @@ void BuildMenu() {
         g.rows.push_back(MakeRow(RowKind::MenuSep));
         g.rows.push_back(MenuRow(Loc(L"Lock Screen"), kLock, L"Win+L"));
         g.rows.push_back(MenuRow(Loc(L"Log Out\u2026"), kPowerDialog));
-    } else if (g.item == BarContent::kWeather) {
-        // prototype "weather": two read-only lines, then "Открыть прогноз…".
-        WeatherSnapshot w;
-        {
-            std::lock_guard lock(g_stateMutex);
-            w = g_state.weather;
-        }
-        std::wstring now = w.city;
-        if (w.hasData) {
-            std::wstring desc = w.weatherDesc;
-            if (!desc.empty()) desc[0] = static_cast<wchar_t>(towlower(desc[0]));
-            now += (now.empty() ? L"" : L" \u00B7 ") + std::to_wstring(static_cast<int>(std::lround(w.temperature))) +
-                   L"\u00B0" + (desc.empty() ? L"" : L", " + desc);
-        }
-        g.rows.push_back(MenuRow(now, kNoAction, L"", true));
-        if (w.hasData && !w.feelsLike.empty()) {
-            std::wstring details = std::wstring(Loc(L"Feels like")) + L" " + w.feelsLike + L"\u00B0";
-            if (!w.humidity.empty()) details += std::wstring(L", ") + Loc(L"humidity") + L" " + w.humidity + L" %";
-            g.rows.push_back(MenuRow(details, kNoAction, L"", true));
-        }
-        g.rows.push_back(MakeRow(RowKind::MenuSep));
-        Row open = MenuRow(Loc(L"Open Forecast\u2026"), kOpenForecast);
-        open.arg = w.city;
-        g.rows.push_back(std::move(open));
     } else if (g.item == BarContent::kTrayMore) {
         // Tray icons not shown on the bar: the program's icon and its tooltip.
         // Left click opens it, right click its own menu (WndProc WM_RBUTTONUP).
@@ -7575,6 +7570,54 @@ void StartBarMenu(HWND icon, UINT uid) {
     SetHooks(true);
 }
 
+// Wind direction ("NE") as the arrow the island's weather tab shows: the way it blows.
+std::wstring WindArrow(const std::wstring& dir) {
+    if (dir == L"N") return L"\x2193";
+    if (dir == L"NNE" || dir == L"NE" || dir == L"ENE") return L"\x2199";
+    if (dir == L"E") return L"\x2190";
+    if (dir == L"ESE" || dir == L"SE" || dir == L"SSE") return L"\x2196";
+    if (dir == L"S") return L"\x2191";
+    if (dir == L"SSW" || dir == L"SW" || dir == L"WSW") return L"\x2197";
+    if (dir == L"W") return L"\x2192";
+    if (dir == L"WNW" || dir == L"NW" || dir == L"NNW") return L"\x2198";
+    return dir;
+}
+
+// The island's weather tab as a panel: header with the city, the condition
+// glyph with the big temperature and the description, wind / feels like /
+// humidity, then "Open Forecast…".
+void BuildWeatherRows() {
+    WeatherSnapshot w;
+    {
+        std::lock_guard lock(g_stateMutex);
+        w = g_state.weather;
+    }
+    const bool fahrenheit = g_settings.weatherFahrenheit;
+    Row header = MakeRow(RowKind::Header, Loc(L"Weather"));
+    header.value = !w.city.empty() ? w.city : std::wstring(Loc(L"Locating..."));
+    g.rows.push_back(std::move(header));
+    Row hero = MakeRow(RowKind::WeatherHero,
+                       w.hasData ? std::to_wstring(static_cast<int>(std::lround(w.temperature))) + L"\u00B0" : L"--\u00B0");
+    hero.glyph = w.hasData && ::WeatherIsClear(w.weatherCode) ? Design::kGlyphBrightness : Design::kGlyphCloud;
+    hero.caption = w.hasData ? w.weatherDesc : std::wstring(Loc(L"Locating..."));
+    g.rows.push_back(std::move(hero));
+    g.rows.push_back(MakeRow(RowKind::Sep));
+    auto metric = [&](const wchar_t* label, std::wstring value) {
+        Row r = MakeRow(RowKind::KeyValue, Loc(label));
+        r.value = w.hasData && !value.empty() ? std::move(value) : std::wstring(L"--");
+        g.rows.push_back(std::move(r));
+    };
+    metric(L"Wind", w.windSpeed.empty() ? L""
+                                        : w.windSpeed + L" " + Loc(fahrenheit ? L"mph" : L"km/h") + L" " +
+                                              WindArrow(w.windDir));
+    metric(L"Feels Like", w.feelsLike.empty() ? L"" : w.feelsLike + L"\u00B0");
+    metric(L"Humidity", w.humidity.empty() ? L"" : w.humidity + L" %");
+    g.rows.push_back(MakeRow(RowKind::Sep));
+    Row open = MakeRow(RowKind::Link, Loc(L"Open Forecast\u2026"), kOpenForecast);
+    open.arg = w.city;
+    g.rows.push_back(std::move(open));
+}
+
 void BuildRows() {
     CloseAppMenu();  // another panel or menu: a program menu from the old one closes
     g.rows.clear();
@@ -7586,6 +7629,8 @@ void BuildRows() {
     g.blinkRow = -1;
     if (g.menu) {
         BuildMenu();
+    } else if (g.item == BarContent::kWeather) {
+        BuildWeatherRows();
     } else if (g.item == BarContent::kVolume) {
         g.rows.push_back(MakeRow(RowKind::Header, Loc(L"Sound")));
         g.rows.push_back(MakeRow(RowKind::Slider));
@@ -8140,6 +8185,25 @@ void DrawRow(int index, const D2D1_MATRIX_3X2_F& base) {
                     g_rt->FillEllipse(D2D1::Ellipse(c, d * 0.5f, d * 0.5f), b);
                 }
             }
+            break;
+        }
+        case RowKind::WeatherHero: {
+            // Glyph (28) at the content edge, the temperature 10 after it on the
+            // same 40 px line, the description below in panel-row, ink-2.
+            const float lineH = Design::kText[static_cast<int>(Text::PanelHero)].lineHeight;
+            DrawGlyph(r.glyph, Design::kWeatherHeroGlyph,
+                      D2D1::RectF(cx, r.y, cx + Design::kWeatherHeroGlyph, r.y + lineH), Design::kInk1, 1.0f);
+            const float tx = cx + Design::kWeatherHeroGlyph + Design::kPanelRowGap;
+            DrawLabel(r.title, Text::PanelHero, tx, r.y, W - cx - tx, lineH, Design::kInk1, 1.0f,
+                      DWRITE_TEXT_ALIGNMENT_LEADING, true);
+            const float descH = Design::kText[static_cast<int>(Text::PanelRow)].lineHeight;
+            DrawLabel(r.caption, Text::PanelRow, cx, r.y + lineH, W - cx * 2.0f, descH, Design::kInk2, 1.0f);
+            break;
+        }
+        case RowKind::KeyValue: {  // label ink-2 on the left, value ink-1 on the right (tnum)
+            DrawLabel(r.title, Text::PanelRow, cx, r.y, W - cx * 2.0f, r.h, Design::kInk2, 1.0f);
+            DrawLabel(r.value, Text::PanelRow, cx, r.y, W - cx * 2.0f, r.h, Design::kInk1, 1.0f,
+                      DWRITE_TEXT_ALIGNMENT_TRAILING, true);
             break;
         }
         case RowKind::Slider: {
@@ -12291,6 +12355,13 @@ DWORD WINAPI WeatherThreadProc(void*) {
                 url = L"/" + encodedCity + L"?format=j1";
             }
         }
+        // The condition in the UI language: wttr.in adds "lang_xx" for it.
+        // Order as UiLanguage: en, fr, es, de, pt, it, ru, tr, hi, zh, ja, ko.
+        static const char* const kWttrLang[] = {"", "fr", "es", "de", "pt", "it", "ru", "tr", "hi", "zh", "ja", "ko"};
+        const int langIndex = g_uiLanguage.load(std::memory_order_relaxed);
+        const std::string wttrLang =
+            langIndex > 0 && langIndex < static_cast<int>(std::size(kWttrLang)) ? kWttrLang[langIndex] : "";
+        if (!wttrLang.empty()) url += L"&lang=" + std::wstring(wttrLang.begin(), wttrLang.end());
 
         Wh_Log(L"Weather: Requesting weather from wttr.in/host: wttr.in, path: %s", url.c_str());
         std::string wRes = HttpGet(L"wttr.in", url.c_str(), true);
@@ -12360,7 +12431,9 @@ DWORD WINAPI WeatherThreadProc(void*) {
                     sscanf(codeStr, "%d", &code);
                 }
 
-                const char* descStr = strstr(currentStr, "\"weatherDesc\":");
+                const std::string langKey = "\"lang_" + wttrLang + "\":";
+                const char* descStr = wttrLang.empty() ? nullptr : strstr(currentStr, langKey.c_str());
+                if (!descStr) descStr = strstr(currentStr, "\"weatherDesc\":");
                 if (descStr) {
                     const char* valStr = strstr(descStr, "\"value\":");
                     if (valStr) {
@@ -17989,6 +18062,12 @@ enum class WeatherVisual {
 
 // Groupings mirror GetWeatherIconAndText so both stay keyed off the same WWO
 // weather codes.
+WeatherVisual WeatherVisualFromCode(int code);
+
+bool WeatherIsClear(int code) {
+    return WeatherVisualFromCode(code) == WeatherVisual::Clear;
+}
+
 WeatherVisual WeatherVisualFromCode(int code) {
     switch (code) {
         case 113:
@@ -22357,7 +22436,7 @@ class Renderer {
             std::vector<int> activeTabs;
             activeTabs.push_back(3); // Time (shown first when the island expands/on hover)
             if (CalendarTabEnabled(settings)) activeTabs.push_back(0); // Calendar
-            if (settings.weather) activeTabs.push_back(1);
+            if (WeatherTabEnabled(settings)) activeTabs.push_back(1);
             if (settings.hardwareMonitorModule) activeTabs.push_back(2);
             if (settings.fileTrayModule) activeTabs.push_back(4);
 
@@ -23085,7 +23164,7 @@ class Renderer {
             if (lyricsFirst) activeTabs.push_back(5);  // Lyrics (pinned first)
             activeTabs.push_back(0); // Media
             if (CalendarTabEnabled(settings)) activeTabs.push_back(1); // Calendar
-            if (settings.weather) activeTabs.push_back(2);
+            if (WeatherTabEnabled(settings)) activeTabs.push_back(2);
             if (settings.hardwareMonitorModule) activeTabs.push_back(3);
             if (settings.fileTrayModule) activeTabs.push_back(4);
             if (settings.lyrics && !lyricsFirst) activeTabs.push_back(5);  // Lyrics (last)
