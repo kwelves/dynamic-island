@@ -4425,7 +4425,7 @@ constexpr D2D1_COLOR_F kOnAccent{1.0f, 1.0f, 1.0f, 1.0f};            // on-accen
 constexpr D2D1_COLOR_F kRed{1.0f, 0.2706f, 0.2275f, 1.0f};           // red
 constexpr D2D1_COLOR_F kIslandTrack{1.0f, 1.0f, 1.0f, 0.2f};         // island-track
 constexpr D2D1_COLOR_F kBarHighlight{1.0f, 1.0f, 1.0f, 0.22f};       // bar-highlight
-constexpr D2D1_COLOR_F kPanelBg{0.149f, 0.149f, 0.157f, 0.55f};      // panel-bg
+constexpr D2D1_COLOR_F kPanelBg{0.149f, 0.149f, 0.157f, 0.40f};      // panel-bg
 constexpr D2D1_COLOR_F kPanelBgSolid{0.149f, 0.149f, 0.157f, 1.0f};  // panel-bg-solid
 constexpr D2D1_COLOR_F kPanelRim{1.0f, 1.0f, 1.0f, 0.129f};          // panel-rim
 constexpr D2D1_COLOR_F kInk1{1.0f, 1.0f, 1.0f, 0.859f};              // ink-1
@@ -6554,6 +6554,9 @@ struct State {
     double radioPendingUntil = 0.0;
     int calYear = 0;
     int calMonth = 0;
+    int pendingItem = -1;          // opens once a dismissed shell flyout is gone
+    HWND pendingFlyout = nullptr;
+    double pendingUntil = 0.0;
     int hlItem = -1;  // highlight plate on the bar
     float hlAlpha = 0.0f;
     double hlOffStart = -1.0;
@@ -7170,7 +7173,7 @@ bool Build(const RECT& body, float sigma) {
     const float m[3][3] = {{0.213f + 0.787f * s, 0.715f - 0.715f * s, 0.072f - 0.072f * s},
                            {0.213f - 0.213f * s, 0.715f + 0.285f * s, 0.072f - 0.072f * s},
                            {0.213f - 0.213f * s, 0.715f - 0.715f * s, 0.072f + 0.928f * s}};
-    // Flood: panel-bg (alpha 0.55) composited source-over the saturated
+    // Flood: panel-bg (alpha 0.40) composited source-over the saturated
     // backdrop; where the backdrop is bright the alpha rises just enough to keep
     // the brightest channel at or below panel-bg at readableAlpha over white.
     const D2D1_COLOR_F& tint = Design::kPanelBg;
@@ -7586,7 +7589,15 @@ void HideWindow() {
     g.dragging = false;
 }
 
+void CancelPending() {
+    if (g.pendingItem < 0) return;
+    g.pendingItem = -1;
+    g.pendingFlyout = nullptr;
+    if (!g.open && g.hlItem >= 0) g.hlOffStart = NowSeconds();  // highlight.off
+}
+
 void Close(bool animate) {
+    CancelPending();
     if (!g.open) return;
     g.open = false;
     g_menuKeys = false;
@@ -7683,12 +7694,77 @@ void Open(int item, bool animate) {
     SetHooks(true);
 }
 
+// ── Shell flyouts ────────────────────────────────────────────────────────────
+// Start, Search, Quick Settings, the notification centre and the tray overflow
+// close when they lose activation, but a click on the bar (a no-activate window)
+// never takes it from them, so they would stay over the panel. Opening a panel
+// hands activation to the taskbar, as a click on it would, and waits for the
+// flyout to go before showing the panel (its backdrop is captured on show).
+constexpr double kFlyoutWaitSec = 0.5;
+
+bool IsShellFlyout(HWND hwnd) {
+    DWORD pid = 0;
+    GetWindowThreadProcessId(hwnd, &pid);
+    if (!pid) return false;
+    wchar_t path[MAX_PATH * 2] = {};
+    DWORD n = ARRAYSIZE(path);
+    bool got = false;
+    if (HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid)) {
+        got = QueryFullProcessImageNameW(h, 0, path, &n) != FALSE;
+        CloseHandle(h);
+    }
+    if (!got) return false;
+    const wchar_t* name = wcsrchr(path, L'\\');
+    name = name ? name + 1 : path;
+    for (const wchar_t* host : {L"StartMenuExperienceHost.exe", L"SearchHost.exe", L"SearchApp.exe",
+                                L"ShellExperienceHost.exe", L"ShellHost.exe"}) {
+        if (_wcsicmp(name, host) == 0) return true;
+    }
+    if (_wcsicmp(name, L"explorer.exe") != 0) return false;
+    wchar_t cls[64] = {};
+    GetClassNameW(hwnd, cls, ARRAYSIZE(cls));
+    return wcscmp(cls, L"TopLevelWindowForOverflowXamlIsland") == 0 ||
+           wcscmp(cls, L"NotifyIconOverflowWindow") == 0;
+}
+
+// The flyout to wait for, or nullptr when none is active or it cannot be dismissed.
+HWND DismissShellFlyout() {
+    HWND fg = GetForegroundWindow();
+    if (!fg || !IsShellFlyout(fg)) return nullptr;
+    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
+    if (!tray || !SetForegroundWindow(tray)) return nullptr;
+    return fg;
+}
+
+bool FlyoutGone(HWND hwnd) {
+    if (!hwnd || !IsWindow(hwnd) || !IsWindowVisible(hwnd)) return true;
+    DWORD cloaked = 0;
+    return SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked != 0;
+}
+
 void Toggle(int item) {
+    if (g.pendingItem >= 0) {
+        const bool same = g.pendingItem == item;
+        CancelPending();
+        if (same) return;  // a second click before it opened
+    }
     if (g.open && g.item == item) {
         Close(true);
-    } else {
-        Open(item, !g.open);
+        return;
     }
+    if (!g.open) {
+        if (HWND flyout = DismissShellFlyout()) {
+            g.pendingItem = item;
+            g.pendingFlyout = flyout;
+            g.pendingUntil = NowSeconds() + kFlyoutWaitSec;
+            g.hlItem = item;  // mouse down: the plate appears at once
+            g.hlAlpha = 1.0f;
+            g.hlOffStart = -1.0;
+            InvalidateBar();
+            return;
+        }
+    }
+    Open(item, !g.open);
 }
 
 void Track(int item) {
@@ -7935,7 +8011,7 @@ void OnIslandExpanded() {
 }
 
 bool Animating() {
-    return g.closing || g.hlOffStart >= 0.0 || g.trackStart >= 0.0 ||
+    return g.pendingItem >= 0 || g.closing || g.hlOffStart >= 0.0 || g.trackStart >= 0.0 ||
            (g.open && (g.openSpring.value != g.openSpring.target || g.fadeSpring.value != g.fadeSpring.target ||
                        g.knob.value != g.knob.target || g.slider.value != g.slider.target || g.dirty));
 }
@@ -7946,6 +8022,12 @@ void Tick() {
     const double now = NowSeconds();
     const float dt = g.lastTick < 0.0 ? 0.0f : Clamp(static_cast<float>(now - g.lastTick), 0.0f, 0.05f);
     g.lastTick = now;
+    if (g.pendingItem >= 0 && (FlyoutGone(g.pendingFlyout) || now >= g.pendingUntil)) {
+        const int item = g.pendingItem;
+        g.pendingItem = -1;
+        g.pendingFlyout = nullptr;
+        Open(item, true);
+    }
     if ((g.open || g.closing) && (!TopBar::g_bar || TopBar::g_fullscreenHidden)) {
         Close(false);
         HideWindow();
