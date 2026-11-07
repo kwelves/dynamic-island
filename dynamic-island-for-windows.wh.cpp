@@ -7697,9 +7697,11 @@ void Open(int item, bool animate) {
 // ── Shell flyouts ────────────────────────────────────────────────────────────
 // Start, Search, Quick Settings, the notification centre and the tray overflow
 // close when they lose activation, but a click on the bar (a no-activate window)
-// never takes it from them, so they would stay over the panel. Opening a panel
-// hands activation to the taskbar, as a click on it would, and waits for the
-// flyout to go before showing the panel (its backdrop is captured on show).
+// never takes it from them, so they would stay over the panel. Windows also
+// refuses SetForegroundWindow while Start is up, so opening a panel presses Esc
+// for the user (each of them closes on it in ~200 ms and gives focus back to the
+// app that had it) and waits for the flyout to go before showing the panel (its
+// backdrop is captured on show).
 constexpr double kFlyoutWaitSec = 0.5;
 
 bool IsShellFlyout(HWND hwnd) {
@@ -7731,8 +7733,11 @@ bool IsShellFlyout(HWND hwnd) {
 HWND DismissShellFlyout() {
     HWND fg = GetForegroundWindow();
     if (!fg || !IsShellFlyout(fg)) return nullptr;
-    HWND tray = FindWindowW(L"Shell_TrayWnd", nullptr);
-    if (!tray || !SetForegroundWindow(tray)) return nullptr;
+    INPUT keys[2] = {};
+    keys[0].type = keys[1].type = INPUT_KEYBOARD;
+    keys[0].ki.wVk = keys[1].ki.wVk = VK_ESCAPE;
+    keys[1].ki.dwFlags = KEYEVENTF_KEYUP;
+    if (SendInput(2, keys, sizeof(INPUT)) != 2) return nullptr;
     return fg;
 }
 
