@@ -2270,6 +2270,22 @@ const wchar_t* Loc(const wchar_t* english) {
         {L"Using Significant Energy", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Значительное энергопотребление", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"No Apps Using Significant Energy", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Нет приложений со значительным энергопотреблением", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"Battery Settings\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Настройки батареи\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        // Quick settings group: Windows' own strings (SystemTray, NetworkIcon resources).
+        {L"Diagnose network problems", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Диагностика проблем с сетью", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Network and Internet settings", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Параметры сети и Интернета", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Perform speed test", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Выполнить проверку скорости", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Troubleshoot sound problems", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Устранение неполадок со звуком", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Open volume mixer", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Открыть микшер громкости", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Sound settings", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Параметры звука", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Power and sleep settings", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Параметры питания и спящего режима", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Internet access", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Доступ к Интернету", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"No internet access", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Без доступа к Интернету", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Connections available", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Доступные подключения", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"No connections available", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Нет доступных подключений", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Battery status: %d%% remaining", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Состояние батареи: осталось %d%% заряда", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Battery status: %d%% available (plugged in)", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Состояние батареи: доступно %d%% (питание от сети)", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Battery status: fully charged %d%%", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Состояние батареи: полностью заряжена %d%%", nullptr, nullptr, nullptr, nullptr, nullptr}},
+        {L"Energy saver on", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Энергосбережение включено", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"About This PC", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Об этом компьютере", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"Windows Settings\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Параметры Windows\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
         {L"Microsoft Store\u2026", {nullptr, nullptr, nullptr, nullptr, nullptr, nullptr, L"Microsoft Store\u2026", nullptr, nullptr, nullptr, nullptr, nullptr}},
@@ -5694,6 +5710,9 @@ LRESULT OnCopyData(const COPYDATASTRUCT* cds) {
 namespace BarContent {
 enum Item { kLogo, kApp, kWeather, kTrayMore, kBluetooth, kNetwork, kVolume, kBattery, kLayout, kDate, kItemCount };
 inline bool IsLeft(int item) { return item <= kWeather; }
+// Wi-Fi, sound and battery: one button on the bar, the quick settings group
+// (components.md "Быстрые настройки"). kBluetooth is never laid out any more.
+inline bool IsQuick(int item) { return item == kNetwork || item == kVolume || item == kBattery; }
 // Per-item hide animation (motion.md "Разъезд бокового контента бара").
 struct ItemVisual {
     float alpha = 1.0f;  // 1 shown, 0 hidden; scale follows as 0.9 + 0.1 * alpha
@@ -5757,7 +5776,18 @@ void Highlight(int* item, float* alpha);
 void StartThreads();
 void StopThreads();
 void Destroy();
+void ContextMenu(int item);
+void WheelVolume(int delta);
 }  // namespace Panels
+
+// Tooltips of the quick settings group on the bar (defined after Panels).
+namespace BarTip {
+void Hover(int item);  // the quick settings item under the cursor, or -1
+void Suppress();       // a click or the wheel: hidden until the cursor leaves the item
+void Tick();
+bool Busy();
+void Destroy();
+}  // namespace BarTip
 
 // ── Top bar (AppBar) ─────────────────────────────────────────────────────────
 // A full-width strip along the top edge of one monitor, registered with the shell
@@ -5821,6 +5851,9 @@ ItemAnim g_items[BarContent::kItemCount];
 ItemAnim g_trayItems[Tray::kMaxShown];  // by position in Metrics::trayBoxes
 int g_trayPress = -1;          // tray icon under a pressed button
 bool g_trayPressRight = false;
+bool g_quickHover = false;     // the cursor is over the quick settings group
+bool g_mouseTracked = false;   // TME_LEAVE armed on the bar
+int g_quickRPress = -1;        // quick settings item under a pressed right button
 
 // Shell_NotifyIconGetRect for the bridge, about the icon's status box on the bar
 // (for an icon in the overflow menu, the chevron's): 1 asks for its top-left
@@ -5861,6 +5894,53 @@ int TrayHit(float x) {
         if (!g_trayItems[i].hidden && x >= r.left && x < r.right) return i;
     }
     return -1;
+}
+
+// The fixed item under client x, or -1. An item hidden by the island takes no
+// clicks (components.md "Hit-test").
+int ItemAt(float x) {
+    if (!g_metrics.valid) return -1;
+    for (int i = 0; i < BarContent::kItemCount; ++i) {
+        const D2D1_RECT_F& r = g_metrics.boxes[i];
+        if (g_metrics.present[i] && !g_items[i].hidden && x >= r.left && x < r.right) return i;
+    }
+    return -1;
+}
+
+// The plate under an item: its own box, or for Wi-Fi, sound and battery the
+// whole quick settings group (the visible part of it), which is one button.
+bool PlateBox(int item, D2D1_RECT_F* out) {
+    if (!g_metrics.valid || item < 0 || item >= BarContent::kItemCount || !g_metrics.present[item]) return false;
+    *out = g_metrics.boxes[item];
+    if (!BarContent::IsQuick(item)) return true;
+    bool any = false;
+    for (int i : {BarContent::kNetwork, BarContent::kVolume, BarContent::kBattery}) {
+        if (!g_metrics.present[i] || g_items[i].hidden) continue;
+        const D2D1_RECT_F& r = g_metrics.boxes[i];
+        if (!any) {
+            *out = r;
+            any = true;
+        } else {
+            out->left = std::min(out->left, r.left);
+            out->right = std::max(out->right, r.right);
+        }
+    }
+    return any;  // all of it hidden by the island: no plate
+}
+
+// The item under a client point from a mouse message (with the mouse captured
+// it may be off the bar), or -1.
+int ItemAtClient(HWND hwnd, LPARAM lParam) {
+    RECT rc = {};
+    GetClientRect(hwnd, &rc);
+    const POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+    return PtInRect(&rc, pt) ? ItemAt(static_cast<float>(pt.x)) : -1;
+}
+
+void SetQuickHover(bool on) {
+    if (on == g_quickHover) return;
+    g_quickHover = on;
+    if (g_bar) InvalidateRect(g_bar, nullptr, FALSE);
 }
 
 // The item with a panel under a screen point on the bar, or -1.
@@ -5964,12 +6044,16 @@ void Paint() {
                     plate.Get());
             }
         }
-        if (hlItem >= 0 && hlAlpha > 0.003f && g_metrics.valid && g_metrics.present[hlItem]) {
+        // components.md "Быстрые настройки": Wi-Fi, sound and battery are one
+        // button with one plate, shown while hovered (as in Windows) and under its
+        // open panel or menu. Any other item: the plate under its open panel.
+        auto drawPlate = [&](int item, float alpha) {
+            D2D1_RECT_F box = {};
+            if (item < 0 || alpha <= 0.003f || !PlateBox(item, &box)) return;
             ComPtr<ID2D1SolidColorBrush> plate;
             D2D1_COLOR_F c = Design::kBarHighlight;
-            c.a *= hlAlpha;
+            c.a *= alpha;
             if (SUCCEEDED(g_target->CreateSolidColorBrush(c, plate.GetAddressOf()))) {
-                const D2D1_RECT_F& box = g_metrics.boxes[hlItem];
                 const float top = Design::kBarHighlightInsetY * g_scale;
                 const float radius = Design::kRadiusBarHighlight * g_scale;
                 g_target->FillRoundedRectangle(
@@ -5977,7 +6061,10 @@ void Paint() {
                                       radius, radius),
                     plate.Get());
             }
-        }
+        };
+        const bool hlQuick = hlItem >= 0 && BarContent::IsQuick(hlItem);
+        drawPlate(BarContent::kNetwork, std::max(g_quickHover ? 1.0f : 0.0f, hlQuick ? hlAlpha : 0.0f));
+        if (!hlQuick) drawPlate(hlItem, hlAlpha);
 
         BarContent::ItemVisual visuals[BarContent::kItemCount];
         for (int i = 0; i < BarContent::kItemCount; ++i) {
@@ -6157,16 +6244,31 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return 0;
         case WM_MOUSEMOVE: {
             Panels::PrefetchBackdrop();  // a click may follow: its panel's backdrop, ready
+            if (!g_mouseTracked) {
+                TRACKMOUSEEVENT tme = {sizeof(tme), TME_LEAVE, hwnd, 0};
+                g_mouseTracked = TrackMouseEvent(&tme) != FALSE;
+            }
+            const int under = ItemAtClient(hwnd, lParam);
+            const int quick = under >= 0 && BarContent::IsQuick(under) ? under : -1;
+            SetQuickHover(quick >= 0);
+            BarTip::Hover(quick);
             // Menu tracking: with a panel open, sliding onto another item switches to
             // its panel in the same frame (motion.md "Menu tracking").
-            if (Panels::OpenItem() < 0) return 0;
-            const float x = static_cast<float>(GET_X_LPARAM(lParam));
-            for (int i = 0; i < BarContent::kItemCount; ++i) {
-                const D2D1_RECT_F& r = g_metrics.boxes[i];
-                if (Panels::HasPanel(i) && g_metrics.present[i] && !g_items[i].hidden && x >= r.left && x < r.right) {
-                    Panels::Track(i);
-                    break;
-                }
+            if (Panels::OpenItem() >= 0 && under >= 0 && Panels::HasPanel(under)) Panels::Track(under);
+            return 0;
+        }
+        case WM_MOUSELEAVE:
+            g_mouseTracked = false;
+            SetQuickHover(false);
+            BarTip::Hover(-1);
+            return 0;
+        case WM_MOUSEWHEEL: {
+            // The wheel over the sound icon changes the volume, as in Windows 11.
+            POINT pt = {GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+            ScreenToClient(hwnd, &pt);
+            if (ItemAt(static_cast<float>(pt.x)) == BarContent::kVolume) {
+                BarTip::Suppress();
+                Panels::WheelVolume(GET_WHEEL_DELTA_WPARAM(wParam));
             }
             return 0;
         }
@@ -6187,7 +6289,16 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
             Panels::CloseProgramMenu();
-            if (msg == WM_RBUTTONDOWN) return 0;
+            if (msg == WM_RBUTTONDOWN) {
+                // Wi-Fi, sound and battery have their own menus, on release as in Windows.
+                const int under = ItemAt(pt.x);
+                g_quickRPress = under >= 0 && BarContent::IsQuick(under) ? under : -1;
+                if (g_quickRPress >= 0) {
+                    BarTip::Suppress();
+                    SetCapture(hwnd);
+                }
+                return 0;
+            }
             auto hit = [&](BarContent::Item item) {
                 const D2D1_RECT_F& r = g_metrics.boxes[item];
                 return g_metrics.present[item] && !g_items[item].hidden && pt.x >= r.left && pt.x < r.right;
@@ -6195,6 +6306,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             for (int i = 0; i < BarContent::kItemCount; ++i) {
                 const auto item = static_cast<BarContent::Item>(i);
                 if (!hit(item)) continue;
+                if (BarContent::IsQuick(item)) BarTip::Suppress();
                 if (Panels::HasPanel(item)) {
                     Panels::Toggle(item);  // a second click on the open item closes it
                 } else {
@@ -6207,6 +6319,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         case WM_LBUTTONUP:
         case WM_RBUTTONUP: {
+            if (msg == WM_RBUTTONUP && g_quickRPress >= 0) {
+                const int item = g_quickRPress;
+                g_quickRPress = -1;
+                if (GetCapture() == hwnd) ReleaseCapture();
+                if (ItemAtClient(hwnd, lParam) == item) Panels::ContextMenu(item);
+                return 0;
+            }
             const int t = g_trayPress;
             g_trayPress = -1;
             if (GetCapture() == hwnd) ReleaseCapture();
@@ -6308,6 +6427,7 @@ void Unregister() {
 
 // Releases the reserved space and destroys the bar. Safe to call repeatedly.
 void Destroy() {
+    BarTip::Destroy();
     Panels::Destroy();
     Unregister();
     BarStatus::g_notifyHwnd = nullptr;
@@ -6327,6 +6447,9 @@ void Destroy() {
     g_fullscreenHidden = false;
     g_shellFullscreen = false;
     g_polledFullscreen = false;
+    g_quickHover = false;
+    g_mouseTracked = false;
+    g_quickRPress = -1;
     g_monitor = nullptr;
     g_monitorRect = {};
     g_heightPx = 0;
@@ -7235,7 +7358,9 @@ enum Action {
     // menus
     kAbout, kWindowsSettings, kStore, kTaskManager, kSleep, kPowerDialog, kLock,
     kSelectLayout, kOnScreenKeyboard, kKeyboardSettings, kOpenForecast,
-    kTrayIcon
+    kTrayIcon,
+    // right-click menus of the quick settings group (Windows' SystemTray.dll targets)
+    kNetworkDiagnostics, kNetworkSettings, kSpeedTest, kSoundTroubleshooter, kVolumeMixer, kPowerSleepSettings
 };
 
 struct Row {
@@ -7309,6 +7434,7 @@ struct State {
     float radius = Design::kRadiusPanel; // radius-panel 16 / radius-menu 12
     float padY = Design::kPanelPadY;     // panel-pad-y 10 / menu-pad-y 5
     bool menu = false;
+    bool context = false;                // a right-click menu of a quick settings item
     int blinkRow = -1;                   // a chosen menu item "blinks" before the menu closes
     double blinkStart = 0.0;
     int hover = -1;
@@ -7350,6 +7476,7 @@ struct State {
     int wx = 0, wy = 0, ww = 0, wh = 0;
 };
 State g;
+bool g_openContext = false;  // the next Open is a right-click menu (ContextMenu)
 
 // components.md: Control Center panels for Wi-Fi, Bluetooth, Sound, Battery (and
 // the calendar); NSMenu-style menus for the logo, the weather and the layout.
@@ -7464,7 +7591,22 @@ HKL ForegroundLayout() {
 }
 
 void BuildMenu() {
-    if (g.item == BarContent::kLogo) {
+    if (g.context) {
+        // Windows 11's own right-click menus of these tray icons: the items of
+        // SystemTray.dll (NetworkContextMenu*, VolumeContextMenu*,
+        // BatteryContextMenuPowerSettings) in the order of its resource keys.
+        if (g.item == BarContent::kNetwork) {
+            g.rows.push_back(MenuRow(Loc(L"Diagnose network problems"), kNetworkDiagnostics));
+            g.rows.push_back(MenuRow(Loc(L"Network and Internet settings"), kNetworkSettings));
+            g.rows.push_back(MenuRow(Loc(L"Perform speed test"), kSpeedTest));
+        } else if (g.item == BarContent::kVolume) {
+            g.rows.push_back(MenuRow(Loc(L"Troubleshoot sound problems"), kSoundTroubleshooter));
+            g.rows.push_back(MenuRow(Loc(L"Open volume mixer"), kVolumeMixer));
+            g.rows.push_back(MenuRow(Loc(L"Sound settings"), kOpenSoundSettings));
+        } else if (g.item == BarContent::kBattery) {
+            g.rows.push_back(MenuRow(Loc(L"Power and sleep settings"), kPowerSleepSettings));
+        }
+    } else if (g.item == BarContent::kLogo) {
         // prototype "win", without the "Недавние объекты" submenu.
         g.rows.push_back(MenuRow(Loc(L"About This PC"), kAbout));
         g.rows.push_back(MakeRow(RowKind::MenuSep));
@@ -7678,7 +7820,7 @@ void BuildRows() {
     CloseAppMenu();  // another panel or menu: a program menu from the old one closes
     g.rows.clear();
     g_iconBitmaps.clear();  // keyed by pixel address: never reuse one for new rows
-    g.menu = IsMenu(g.item);
+    g.menu = IsMenu(g.item) || g.context;
     g.width = Design::kPanelW;
     g.radius = g.menu ? Design::kRadiusMenu : Design::kRadiusPanel;
     g.padY = g.menu ? Design::kMenuPadY : Design::kPanelPadY;
@@ -8658,7 +8800,10 @@ bool Place() {
     const BarContent::Metrics& m = TopBar::g_metrics;
     if (!m.valid || g.item < 0 || !m.present[g.item]) return false;
     const float s = std::max(0.05f, TopBar::g_scale);
-    const D2D1_RECT_F box = m.boxes[g.item];
+    // A quick settings panel hangs from the group's plate; its right-click menu
+    // from the icon that was clicked.
+    D2D1_RECT_F box = m.boxes[g.item];
+    if (!g.context) TopBar::PlateBox(g.item, &box);
     const float panelW = g.width * s;
     const RECT& mon = TopBar::g_monitorRect;
     const float x = std::round(Clamp(static_cast<float>(bar.left) + box.left, mon.left + Design::kPanelMargin * s,
@@ -8762,12 +8907,14 @@ void Open(int item, bool animate) {
     QueryPerformanceCounter(&openStart);
     g_openTiming = OpenTiming{};
     g_openTiming.item = item;
+    const bool context = std::exchange(g_openContext, false);
     if (!HasPanel(item) || !TopBar::g_metrics.valid || !TopBar::g_metrics.present[item] ||
         TopBar::g_items[item].hidden || !EnsureWindow()) {
         return;
     }
     const BarStatus::Model model = BarStatus::Get();
     g.item = item;
+    g.context = context;
     g.open = true;
     g.closing = false;
     g.dragging = false;
@@ -8778,7 +8925,9 @@ void Open(int item, bool animate) {
         g.calYear = now.wYear;
         g.calMonth = now.wMonth;
     }
-    if (item == BarContent::kBluetooth) {
+    if (context) {
+        g.rowsOff = false;
+    } else if (item == BarContent::kBluetooth) {
         g.switchOn = model.bluetooth == 1;
         g.rowsOff = !g.switchOn;
         g.knob.Reset(g.switchOn ? Design::kSwitchW - Design::kSwitchH : 0.0f);
@@ -8806,7 +8955,7 @@ void Open(int item, bool animate) {
             Wake();
         }
     }
-    if (item == BarContent::kVolume) {
+    if (item == BarContent::kVolume && !context) {
         Audio::g_volume.Reset();
         g.slider.Reset(Audio::Level());
     }
@@ -8934,13 +9083,14 @@ void Toggle(int item) {
         CancelPending();
         if (same) return;  // a second click before it opened
     }
-    if (g.open && g.item == item) {
+    if (g.open && g.item == item && !g.context) {
         // Slid onto it with the mouse a moment ago (menu tracking) and clicked:
         // the click meant "open", so it stays open.
         if (NowSeconds() - g.trackedAt < kTrackedClickSec) return;
         Close(true);
         return;
     }
+    if (g.open && g.context) Close(false);  // a right-click menu gives way to the panel
     if (!g.open) {
         if (HWND flyout = DismissShellFlyout()) {
             g.pendingItem = item;
@@ -8957,6 +9107,9 @@ void Toggle(int item) {
 }
 
 void Track(int item) {
+    // A right-click menu stays put, as in Windows; the quick settings group is
+    // one button, so sliding inside it changes nothing.
+    if (g.context || (BarContent::IsQuick(item) && BarContent::IsQuick(g.item))) return;
     if (g.open && g.item != item && HasPanel(item)) {
         Open(item, false);
         g.trackedAt = NowSeconds();
@@ -8965,13 +9118,23 @@ void Track(int item) {
 
 // ← / →: the neighbouring item with a panel, in screen order, skipping hidden ones.
 void Step(int direction) {
-    if (!g.open) return;
+    if (!g.open || g.context) return;
     std::vector<int> items;
     for (int i = 0; i < BarContent::kItemCount; ++i) {
         if (HasPanel(i) && TopBar::g_metrics.present[i] && !TopBar::g_items[i].hidden) items.push_back(i);
     }
     std::sort(items.begin(), items.end(), [](int a, int b) {
         return TopBar::g_metrics.boxes[a].left < TopBar::g_metrics.boxes[b].left;
+    });
+    // The quick settings group is one stop: the open item stands for it, or else
+    // its leftmost visible item.
+    bool groupSeen = false;
+    std::erase_if(items, [&](int i) {
+        if (!BarContent::IsQuick(i)) return false;
+        if (BarContent::IsQuick(g.item)) return i != g.item;
+        if (groupSeen) return true;
+        groupSeen = true;
+        return false;
     });
     auto it = std::find(items.begin(), items.end(), g.item);
     if (it == items.end()) return;
@@ -9175,7 +9338,37 @@ void Activate(const Row& r) {
         case kTrayIcon:
             Tray::Click(r.trayHwnd, r.trayUid, false, RowAnchor(r));
             break;
+        case kNetworkDiagnostics:
+            OpenSettings(L"ms-contact-support://?ActivationType=NetworkDiagnostics&invoker=SystemTrayIcon");
+            break;
+        case kNetworkSettings:
+            OpenSettings(L"ms-settings:network");
+            break;
+        case kSpeedTest:
+            OpenSettings(L"https://go.microsoft.com/fwlink/?linkid=2324916");
+            break;
+        case kSoundTroubleshooter:
+            OpenSettings(L"ms-contact-support://windows-speaker-icon");
+            break;
+        case kVolumeMixer:
+            OpenSettings(L"ms-settings:apps-volume");
+            break;
+        case kPowerSleepSettings:
+            OpenSettings(L"ms-settings:powersleep");
+            break;
     }
+}
+
+// Right click on Wi-Fi, sound or battery: that icon's menu, on release, as in
+// Windows. A second right click on the same icon only closes it.
+void ContextMenu(int item) {
+    const bool same = g.open && g.context && g.item == item;
+    CancelPending();
+    if (g.open) Close(same);
+    if (same) return;
+    g_openContext = true;
+    Open(item, true);
+    g_openContext = false;
 }
 
 // A menu item was chosen: blink (plate off 70 ms, on 60 ms), then the menu
@@ -9215,7 +9408,7 @@ void OnData() {
     const int radio = g_radioResult.exchange(0);
     const int wifiRadio = g_wifiRadioResult.exchange(0);
     const int connect = g_connectResult.exchange(0);
-    if (!g.open) return;
+    if (!g.open || g.context) return;  // a right-click menu has no live data
     if (g.item == BarContent::kBluetooth && radio < 0) {
         // Windows did not let us switch the radio: hand over to Settings.
         g.radioPendingUntil = 0.0;
@@ -9253,7 +9446,7 @@ void OnData() {
 }
 
 void OnStatusChanged() {
-    if (!g.open) return;
+    if (!g.open || g.context) return;
     const BarStatus::Model model = BarStatus::Get();
     const double now = NowSeconds();
     if (g.item == BarContent::kVolume && !g.dragging && now - g.lastLocalVolume > 1.0) {
@@ -9303,7 +9496,8 @@ void OnIslandExpanded() {
 }
 
 bool Animating() {
-    return g.pendingItem >= 0 || g_appMenuPid.load() || g.closing || g.hlOffStart >= 0.0 || g.trackStart >= 0.0 ||
+    return BarTip::Busy() || g.pendingItem >= 0 || g_appMenuPid.load() || g.closing || g.hlOffStart >= 0.0 ||
+           g.trackStart >= 0.0 ||
            (g.open && (g.openSpring.value != g.openSpring.target || g.fadeSpring.value != g.fadeSpring.target ||
                        g.knob.value != g.knob.target || g.slider.value != g.slider.target || g.dirty));
 }
@@ -9350,7 +9544,7 @@ void Tick() {
         }
     }
     if (g.open) {
-        if (g.item == BarContent::kVolume) {
+        if (g.item == BarContent::kVolume && !g.context) {
             g_volumeFlyoutQuietUntil.store(GetTickCount64() + 400, std::memory_order_relaxed);
         }
         bool moving = g.dirty;
@@ -9384,6 +9578,7 @@ void Tick() {
         }
         InvalidateBar();
     }
+    BarTip::Tick();
 }
 
 int RowAt(float uy) {
@@ -9414,6 +9609,32 @@ float SliderValueAt(const Row& r, float ux) {
 void SetLocalVolume(float v) {
     g.lastLocalVolume = NowSeconds();
     Audio::SetLevel(v);
+}
+
+// The wheel over the bar's sound icon: 2 % a notch (quickSettings.wheelVolumeStepPct),
+// touchpads in proportion, unmuting like the volume keys. The island's volume
+// flyout shows the change, as Windows shows its own.
+void WheelVolume(int delta) {
+    static float s_carry = 0.0f;
+    s_carry += static_cast<float>(delta) * static_cast<float>(Design::kWheelVolumeStepPct) / WHEEL_DELTA;
+    const int change = static_cast<int>(s_carry);  // whole percents, toward zero
+    if (change == 0) return;
+    s_carry -= static_cast<float>(change);
+    ComPtr<IMMDeviceEnumerator> e = Audio::Enumerator();
+    ComPtr<IMMDevice> device;
+    ComPtr<IAudioEndpointVolume> volume;
+    if (!e || FAILED(e->GetDefaultAudioEndpoint(eRender, eMultimedia, device.GetAddressOf())) || !device ||
+        FAILED(device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
+                                reinterpret_cast<void**>(volume.GetAddressOf())))) {
+        return;
+    }
+    float level = 0.0f;
+    BOOL muted = FALSE;
+    volume->GetMasterVolumeLevelScalar(&level);
+    volume->GetMute(&muted);
+    const int percent = std::clamp(static_cast<int>(std::lround(level * 100.0f)) + change, 0, 100);
+    volume->SetMasterVolumeLevelScalar(static_cast<float>(percent) / 100.0f, nullptr);
+    if (muted) volume->SetMute(FALSE, nullptr);
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -9561,6 +9782,389 @@ void Destroy() {
 }
 
 }  // namespace Panels
+
+// ── Bar tooltips ─────────────────────────────────────────────────────────────
+// Windows' tooltips over the quick settings group (network, sound, battery):
+// after the double-click time of hovering (Windows' tooltip delay) one appears
+// under the icon; once one is up, sliding to the next icon swaps it at once; a
+// click or the wheel hides it until the cursor leaves that icon; none while a
+// panel or menu is open. The texts are Windows' own (SystemTray and NetworkIcon
+// resources); the look is components.md "Подсказка". Render thread only (an
+// STA), ticked by Panels::Tick.
+namespace BarTip {
+
+using Design::Text;
+
+constexpr wchar_t kClassName[] = L"Windhawk.DynamicIslandBarTip";
+constexpr double kRefreshSec = 1.0;  // the text follows the state while it shows
+
+HWND g_wnd = nullptr;
+bool g_classRegistered = false;
+HDC g_dc = nullptr;
+HBITMAP g_bitmap = nullptr;
+HGDIOBJ g_oldBitmap = nullptr;
+int g_bitmapW = 0, g_bitmapH = 0;
+ComPtr<ID2D1Factory> g_factory;
+ComPtr<ID2D1DCRenderTarget> g_rt;
+ComPtr<ID2D1SolidColorBrush> g_brush;
+
+int g_hover = -1;          // quick settings item under the cursor
+double g_hoverSince = 0.0;
+int g_suppressed = -1;     // clicked or scrolled: no tooltip until the cursor leaves it
+int g_shown = -1;          // item whose tooltip is up
+std::wstring g_text;
+double g_textAt = 0.0;
+SpringValue g_fade;        // panel.fade, 0 -> 1
+double g_lastTick = -1.0;
+int g_x = 0, g_y = 0, g_w = 0, g_h = 0;
+
+LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_MOUSEACTIVATE:
+            return MA_NOACTIVATE;
+        case WM_NCHITTEST:
+            return HTTRANSPARENT;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+bool EnsureWindow() {
+    if (g_wnd) return true;
+    HINSTANCE inst = GetModuleHandleW(nullptr);
+    if (!g_classRegistered) {
+        WNDCLASSEXW wc = {};
+        wc.cbSize = sizeof(wc);
+        wc.lpfnWndProc = WndProc;
+        wc.hInstance = inst;
+        wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+        wc.lpszClassName = kClassName;
+        if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
+        g_classRegistered = true;
+    }
+    g_wnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST,
+                            kClassName, L"", WS_POPUP, 0, 0, 1, 1, nullptr, nullptr, inst, nullptr);
+    return g_wnd != nullptr;
+}
+
+void ReleaseSurface() {
+    g_brush.Reset();
+    g_rt.Reset();
+    if (g_dc) {
+        if (g_oldBitmap) SelectObject(g_dc, g_oldBitmap);
+        DeleteDC(g_dc);
+    }
+    if (g_bitmap) DeleteObject(g_bitmap);
+    g_dc = nullptr;
+    g_bitmap = nullptr;
+    g_oldBitmap = nullptr;
+    g_bitmapW = g_bitmapH = 0;
+}
+
+bool EnsureSurface(int w, int h) {
+    if (!g_dc || g_bitmapW != w || g_bitmapH != h) {
+        ReleaseSurface();
+        g_dc = CreateCompatibleDC(nullptr);
+        BITMAPINFO bi = {};
+        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+        bi.bmiHeader.biWidth = w;
+        bi.bmiHeader.biHeight = -h;
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        void* bits = nullptr;
+        g_bitmap = g_dc ? CreateDIBSection(g_dc, &bi, DIB_RGB_COLORS, &bits, nullptr, 0) : nullptr;
+        if (!g_bitmap) {
+            ReleaseSurface();
+            return false;
+        }
+        g_oldBitmap = SelectObject(g_dc, g_bitmap);
+        g_bitmapW = w;
+        g_bitmapH = h;
+    }
+    if (!g_factory && FAILED(D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, __uuidof(ID2D1Factory),
+                                               reinterpret_cast<void**>(g_factory.GetAddressOf())))) {
+        return false;
+    }
+    if (!g_rt) {
+        const D2D1_RENDER_TARGET_PROPERTIES props = D2D1::RenderTargetProperties(
+            D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED), 96.0f, 96.0f);
+        if (FAILED(g_factory->CreateDCRenderTarget(&props, g_rt.GetAddressOf()))) return false;
+        g_rt->SetTextAntialiasMode(D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE);
+    }
+    return true;
+}
+
+// ── Texts ─────────────────────────────────────────────────────────────────────
+std::wstring FormatPercent(const wchar_t* format, int percent) {
+    wchar_t buffer[256] = {};
+    swprintf(buffer, ARRAYSIZE(buffer), format, percent);
+    return buffer;
+}
+
+// Wi-Fi networks in range (Windows' cached list, no scan).
+bool WifiAvailable() {
+    HANDLE wlan = nullptr;
+    DWORD version = 0;
+    if (WlanOpenHandle(2, nullptr, &version, &wlan) != ERROR_SUCCESS) return false;
+    bool any = false;
+    WLAN_INTERFACE_INFO_LIST* list = nullptr;
+    if (WlanEnumInterfaces(wlan, nullptr, &list) == ERROR_SUCCESS && list) {
+        for (DWORD i = 0; i < list->dwNumberOfItems && !any; ++i) {
+            WLAN_AVAILABLE_NETWORK_LIST* networks = nullptr;
+            if (WlanGetAvailableNetworkList(wlan, &list->InterfaceInfo[i].InterfaceGuid, 0, nullptr, &networks) ==
+                    ERROR_SUCCESS &&
+                networks) {
+                any = networks->dwNumberOfItems > 0;
+                WlanFreeMemory(networks);
+            }
+        }
+        WlanFreeMemory(list);
+    }
+    WlanCloseHandle(wlan, nullptr);
+    return any;
+}
+
+// NetworkIcon: the connected network's name over "Internet access" / "No
+// internet access"; with none, whether there are connections to choose from.
+std::wstring NetworkText() {
+    static const CLSID kClsidNetworkListManager = {
+        0xDCB00C01, 0x570F, 0x4A9B, {0x8D, 0x69, 0x19, 0x9F, 0xDB, 0xA5, 0x72, 0x3B}};
+    ComPtr<INetworkListManager> nlm;
+    ComPtr<IEnumNetworks> networks;
+    if (SUCCEEDED(CoCreateInstance(kClsidNetworkListManager, nullptr, CLSCTX_ALL, IID_PPV_ARGS(nlm.GetAddressOf()))) &&
+        SUCCEEDED(nlm->GetNetworks(NLM_ENUM_NETWORK_CONNECTED, networks.GetAddressOf())) && networks) {
+        std::wstring name;
+        bool found = false, internet = false;
+        ComPtr<INetwork> network;
+        ULONG fetched = 0;
+        while (networks->Next(1, network.ReleaseAndGetAddressOf(), &fetched) == S_OK && fetched == 1 && network) {
+            NLM_CONNECTIVITY connectivity = NLM_CONNECTIVITY_DISCONNECTED;
+            network->GetConnectivity(&connectivity);
+            const bool online =
+                (connectivity & (NLM_CONNECTIVITY_IPV4_INTERNET | NLM_CONNECTIVITY_IPV6_INTERNET)) != 0;
+            BSTR text = nullptr;
+            if (SUCCEEDED(network->GetName(&text)) && text) {
+                if (!found || (online && !internet)) {  // the one with internet access first
+                    name = text;
+                    internet = online;
+                    found = true;
+                }
+                SysFreeString(text);
+            }
+        }
+        if (found) return name + L"\n" + Loc(internet ? L"Internet access" : L"No internet access");
+    }
+    return Loc(WifiAvailable() ? L"Connections available" : L"No connections available");
+}
+
+// SndVolSSO / SystemTray: "<device>: 45%", or "<device>: muted".
+std::wstring VolumeText() {
+    ComPtr<IMMDeviceEnumerator> e = Panels::Audio::Enumerator();
+    ComPtr<IMMDevice> device;
+    if (!e || FAILED(e->GetDefaultAudioEndpoint(eRender, eMultimedia, device.GetAddressOf())) || !device) return {};
+    std::wstring name;
+    ComPtr<IPropertyStore> props;
+    if (SUCCEEDED(device->OpenPropertyStore(STGM_READ, props.GetAddressOf())) && props) {
+        PROPVARIANT v;
+        PropVariantInit(&v);
+        if (SUCCEEDED(props->GetValue(Panels::Audio::kFriendlyName, &v)) && v.vt == VT_LPWSTR && v.pwszVal) {
+            name = v.pwszVal;
+        }
+        PropVariantClear(&v);
+    }
+    ComPtr<IAudioEndpointVolume> volume;
+    float level = 0.0f;
+    BOOL muted = FALSE;
+    if (FAILED(device->Activate(__uuidof(IAudioEndpointVolume), CLSCTX_ALL, nullptr,
+                                reinterpret_cast<void**>(volume.GetAddressOf()))) ||
+        FAILED(volume->GetMasterVolumeLevelScalar(&level)) || FAILED(volume->GetMute(&muted))) {
+        return name;
+    }
+    if (muted) return name + L": " + Loc(L"Muted");
+    return name + L": " + std::to_wstring(std::lround(level * 100.0f)) + L"%";
+}
+
+// SystemTray BatteryStateToolTip*: remaining on battery, available on power,
+// fully charged at 100 % on power; energy saver on a second line.
+std::wstring BatteryText() {
+    SYSTEM_POWER_STATUS power = {};
+    if (!GetSystemPowerStatus(&power) || (power.BatteryFlag & 128) || power.BatteryLifePercent == 255) return {};
+    const int percent = power.BatteryLifePercent;
+    std::wstring text;
+    if (power.ACLineStatus == 1) {
+        const bool charging = (power.BatteryFlag & 8) != 0;
+        text = percent >= 100 && !charging ? FormatPercent(Loc(L"Battery status: fully charged %d%%"), percent)
+                                           : FormatPercent(Loc(L"Battery status: %d%% available (plugged in)"), percent);
+    } else {
+        text = FormatPercent(Loc(L"Battery status: %d%% remaining"), percent);
+    }
+    if (power.SystemStatusFlag == 1) text += std::wstring(L"\n") + Loc(L"Energy saver on");
+    return text;
+}
+
+std::wstring TextFor(int item) {
+    switch (item) {
+        case BarContent::kNetwork:
+            return NetworkText();
+        case BarContent::kVolume:
+            return VolumeText();
+        case BarContent::kBattery:
+            return BatteryText();
+    }
+    return {};
+}
+
+// ── Window ────────────────────────────────────────────────────────────────────
+void Hide() {
+    if (g_wnd) ShowWindow(g_wnd, SW_HIDE);
+    g_shown = -1;
+}
+
+// Lays out g_text under `item`'s icon and draws it at `alpha`.
+bool Render(int item, float alpha) {
+    RECT bar = {};
+    if (!TopBar::GetAnchorRect(&bar) || !TopBar::g_metrics.valid || !TopBar::g_metrics.present[item]) return false;
+    const float k = std::max(0.05f, TopBar::g_scale);
+    ComPtr<IDWriteTextLayout> layout =
+        DesignType::Layout(g_text, Text::PanelCaption, k, 1000.0f * k, 1000.0f * k, 8);
+    if (!layout) return false;
+    const float padX = Design::kTooltipPadX * k;
+    const float padY = Design::kTooltipPadY * k;
+    const int w = static_cast<int>(std::ceil(DesignType::Width(layout.Get()) + padX * 2.0f));
+    const int h = static_cast<int>(std::ceil(DesignType::Height(layout.Get()) + padY * 2.0f));
+    if (!EnsureSurface(w, h)) return false;
+
+    // components.md "Подсказка": under the icon, centred, inside the monitor.
+    const D2D1_RECT_F& box = TopBar::g_metrics.boxes[item];
+    const RECT& mon = TopBar::g_monitorRect;
+    const float margin = Design::kPanelMargin * k;
+    const float cx = static_cast<float>(bar.left) + (box.left + box.right) * 0.5f;
+    g_x = static_cast<int>(std::lround(Clamp(cx - w * 0.5f, mon.left + margin, mon.right - w - margin)));
+    g_y = static_cast<int>(std::lround(static_cast<float>(bar.bottom) + Design::kPanelGap * k));
+    g_w = w;
+    g_h = h;
+
+    RECT rc = {0, 0, w, h};
+    if (FAILED(g_rt->BindDC(g_dc, &rc))) return false;
+    g_rt->BeginDraw();
+    g_rt->SetTransform(D2D1::Matrix3x2F::Identity());
+    g_rt->Clear(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.0f));
+    if (!g_brush) g_rt->CreateSolidColorBrush(Design::kPanelBgSolid, g_brush.GetAddressOf());
+    if (g_brush) {
+        const float radius = Design::kRadiusTooltip * k;
+        const float hair = Design::kHairline;  // one physical pixel
+        g_brush->SetColor(Design::kPanelBgSolid);
+        g_rt->FillRoundedRectangle(D2D1::RoundedRect(D2D1::RectF(0.0f, 0.0f, static_cast<float>(w),
+                                                                 static_cast<float>(h)),
+                                                     radius, radius),
+                                   g_brush.Get());
+        g_brush->SetColor(Design::kPanelRim);
+        g_rt->DrawRoundedRectangle(
+            D2D1::RoundedRect(D2D1::RectF(hair * 0.5f, hair * 0.5f, w - hair * 0.5f, h - hair * 0.5f),
+                              radius - hair * 0.5f, radius - hair * 0.5f),
+            g_brush.Get(), hair);
+        g_brush->SetColor(Design::kInk1);
+        g_rt->DrawTextLayout(D2D1::Point2F(padX, padY), layout.Get(), g_brush.Get());
+    }
+    if (g_rt->EndDraw() == static_cast<HRESULT>(D2DERR_RECREATE_TARGET)) {
+        g_rt.Reset();
+        g_brush.Reset();
+        return false;
+    }
+    POINT dst = {g_x, g_y};
+    SIZE size = {w, h};
+    POINT src = {0, 0};
+    BLENDFUNCTION blend = {AC_SRC_OVER, 0, static_cast<BYTE>(std::lround(Clamp(alpha, 0.0f, 1.0f) * 255.0f)),
+                           AC_SRC_ALPHA};
+    return UpdateLayeredWindow(g_wnd, nullptr, &dst, &size, g_dc, &src, 0, &blend, ULW_ALPHA) != FALSE;
+}
+
+void Show(int item) {
+    std::wstring text = TextFor(item);
+    if (text.empty() || !EnsureWindow()) {
+        Hide();
+        return;
+    }
+    const bool swap = g_shown >= 0;  // sliding from one icon to the next: no fade
+    g_text = std::move(text);
+    g_textAt = NowSeconds();
+    g_fade.Reset(swap ? 1.0f : 0.0f);
+    g_fade.target = 1.0f;
+    if (!Render(item, g_fade.value)) {
+        Hide();
+        return;
+    }
+    g_shown = item;
+    SetWindowPos(g_wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+}
+
+// ── Public ────────────────────────────────────────────────────────────────────
+void Hover(int item) {
+    if (item == g_hover) return;
+    g_hover = item;
+    g_hoverSince = NowSeconds();
+    if (item != g_suppressed) g_suppressed = -1;
+    if (item < 0) Hide();
+}
+
+void Suppress() {
+    g_suppressed = g_hover;
+    Hide();
+}
+
+bool Busy() {
+    return g_shown >= 0 || (g_hover >= 0 && g_hover != g_suppressed);
+}
+
+void Tick() {
+    const double now = NowSeconds();
+    const float dt = g_lastTick < 0.0 ? 0.0f : Clamp(static_cast<float>(now - g_lastTick), 0.0f, 0.05f);
+    g_lastTick = now;
+    const bool usable = g_hover >= 0 && g_hover != g_suppressed && Panels::OpenItem() < 0 && TopBar::g_bar &&
+                        !TopBar::g_fullscreenHidden && TopBar::g_metrics.valid && TopBar::g_metrics.present[g_hover] &&
+                        !TopBar::g_items[g_hover].hidden;
+    if (!usable) {
+        if (g_shown >= 0) Hide();
+        return;
+    }
+    if (g_shown != g_hover) {
+        if (g_shown >= 0 || now - g_hoverSince >= GetDoubleClickTime() / 1000.0) Show(g_hover);
+        return;
+    }
+    bool redraw = false;
+    if (now - g_textAt >= kRefreshSec) {
+        g_textAt = now;
+        std::wstring text = TextFor(g_shown);
+        if (!text.empty() && text != g_text) {
+            g_text = std::move(text);
+            redraw = true;
+        }
+    }
+    if (g_fade.value != g_fade.target || g_fade.velocity != 0.0f) {
+        g_fade.Step(dt, Design::kPanelFade.stiffness, Design::kPanelFade.damping);
+        redraw = true;
+    }
+    if (redraw && !Render(g_shown, g_fade.value)) Hide();
+}
+
+// Render thread, from TopBar::Destroy.
+void Destroy() {
+    Hide();
+    g_hover = g_suppressed = -1;
+    ReleaseSurface();
+    g_factory.Reset();
+    if (g_wnd) {
+        DestroyWindow(g_wnd);
+        g_wnd = nullptr;
+    }
+    if (g_classRegistered) {
+        UnregisterClassW(kClassName, GetModuleHandleW(nullptr));
+        g_classRegistered = false;
+    }
+}
+
+}  // namespace BarTip
 
 // ── Bar notch ────────────────────────────────────────────────────────────────
 // Top bar + Notch shape: the island *is* the bar's notch. At rest it is exactly as
@@ -18516,12 +19120,9 @@ void Paint(ID2D1RenderTarget* rt, D2D1_SIZE_F size, const BarStatus::Model& mode
         dateText = Layout(model.date, T::BarMenu, k, 10000.0f, height, 1, true);
         placeRight(kDate, itemPad * 2.0f + Width(dateText.Get()));
     }
-    ComPtr<IDWriteTextLayout> layoutText;
-    if (!model.layout.empty()) {
-        layoutText = Layout(model.layout, T::BarLayout, k, Design::kLayoutBoxW * k, height);
-        if (layoutText) layoutText->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-        placeRight(kLayout, statusPad * 2.0f + Design::kLayoutBoxW * k);
-    }
+    // The quick settings group (Wi-Fi, sound, battery), then the layout left of
+    // it, as in Windows 11 (components.md "Порядок справа"). No Bluetooth item:
+    // Bluetooth lives in the quick settings.
     ComPtr<IDWriteTextLayout> batteryText;
     wchar_t batteryGlyph = 0;
     float batteryGlyphW = 0.0f;
@@ -18534,7 +19135,12 @@ void Paint(ID2D1RenderTarget* rt, D2D1_SIZE_F size, const BarStatus::Model& mode
     }
     if (model.hasAudio) placeRight(kVolume, statusPad * 2.0f + iconBox);
     placeRight(kNetwork, statusPad * 2.0f + iconBox);
-    if (model.bluetooth >= 0) placeRight(kBluetooth, statusPad * 2.0f + iconBox);
+    ComPtr<IDWriteTextLayout> layoutText;
+    if (!model.layout.empty()) {
+        layoutText = Layout(model.layout, T::BarLayout, k, Design::kLayoutBoxW * k, height);
+        if (layoutText) layoutText->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        placeRight(kLayout, statusPad * 2.0f + Design::kLayoutBoxW * k);
+    }
     // Programs' tray icons, left of the system items like third-party menu
     // extras in macOS: the status box (8 + 16 + 8) each, 2 apart, the first one
     // added nearest to the system items. Only the ones Windows shows on the
@@ -18711,12 +19317,6 @@ void Paint(ID2D1RenderTarget* rt, D2D1_SIZE_F size, const BarStatus::Model& mode
                            D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
         }
     }
-    if (out->present[kBluetooth]) {
-        const float a = begin(kBluetooth) * (model.bluetooth ? 1.0f : Design::kDimAlpha);
-        glyphAt(Design::kGlyphBluetooth, icons16, out->boxes[kBluetooth].left + statusPad, iconBox,
-                WithAlpha(ink, a));
-    }
-
     rt->SetTransform(base);
     out->valid = true;
 }
