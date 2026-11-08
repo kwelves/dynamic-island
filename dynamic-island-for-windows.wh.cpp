@@ -5209,6 +5209,9 @@ namespace TopBar {
 LRESULT TrayIconRect(HWND hwnd, UINT uid, int corner);
 bool GetAnchorRect(RECT* out);
 }
+namespace Panels {
+void DumpTimings();
+}
 
 namespace Tray {
 
@@ -5217,6 +5220,7 @@ constexpr uint32_t kMagic = 0x31544944;        // 'DIT1'
 constexpr uint32_t kHello = 0xFFFFFFFF;        // the bridge (re)started
 constexpr uint32_t kQuery = 0xFFFFFFFE;        // diagnostics: the reply packs the counters below
 constexpr uint32_t kDump = 0xFFFFFFFD;         // diagnostics: write the icon list to %TEMP%
+constexpr uint32_t kTimings = 0xFFFFFFFB;      // diagnostics: write the last panel open timing to %TEMP%
 constexpr uint32_t kRect = 0xFFFFFFFC;         // bridge: Shell_NotifyIconGetRect, version = 1 top-left, 2 size
 constexpr uint32_t kMaxIconPx = 64;
 constexpr int kMaxShown = 32;
@@ -5591,6 +5595,10 @@ LRESULT OnCopyData(const COPYDATASTRUCT* cds) {
         DumpIcons();
         return 1;
     }
+    if (p.message == kTimings) {
+        Panels::DumpTimings();
+        return 1;
+    }
     if (p.message == kRect) {  // the icon's corner on the bar, or 0 so Explorer answers
         const HWND owner = reinterpret_cast<HWND>(static_cast<uintptr_t>(p.hwnd));
         const bool guid = HasGuid(p.guid);
@@ -5699,6 +5707,8 @@ constexpr UINT kAppMenuHoverMessage = WM_APP + 0x450;
 constexpr UINT kAppMenuClickMessage = WM_APP + 0x451;
 void AppMenuHover(POINT pt);
 void AppMenuClick(POINT pt, bool right);
+void PrefetchBackdrop();
+bool Warm();
 std::vector<HWND> MenuWindows(DWORD pid);
 void StartBarMenu(HWND icon, UINT uid);
 bool BarMenuIcon(HWND* icon, UINT* uid);
@@ -5743,6 +5753,7 @@ namespace TopBar {
 
 constexpr wchar_t kClassName[] = L"Windhawk.DynamicIslandTopBar";
 constexpr UINT kCallbackMessage = WM_APP + 0x44A;
+constexpr UINT_PTR kWarmTimer = 1;
 
 // Automatic height, content px (multiplied by sizeScale, which includes DPI).
 constexpr float kAutoHeight = Design::kBarHeight;
@@ -6084,6 +6095,14 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             InvalidateRect(hwnd, nullptr, FALSE);
             Panels::OnStatusChanged();
             return 0;
+        case WM_TIMER:
+            if (wParam == kWarmTimer) {  // until the bar is laid out, once a second, at most 5 tries
+                static int tries = 0;
+                if (Panels::Warm() || ++tries >= 5) KillTimer(hwnd, kWarmTimer);
+                else SetTimer(hwnd, kWarmTimer, 1000, nullptr);
+                return 0;
+            }
+            break;
         case WM_COPYDATA:  // tray icons from the Explorer bridge
             if (const LRESULT handled = Tray::OnCopyData(reinterpret_cast<const COPYDATASTRUCT*>(lParam))) {
                 InvalidateRect(hwnd, nullptr, FALSE);
@@ -6109,6 +6128,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             Panels::AppMenuClick({GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)}, wParam != 0);
             return 0;
         case WM_MOUSEMOVE: {
+            Panels::PrefetchBackdrop();  // a click may follow: its panel's backdrop, ready
             // Menu tracking: with a panel open, sliding onto another item switches to
             // its panel in the same frame (motion.md "Menu tracking").
             if (Panels::OpenItem() < 0) return 0;
@@ -6225,6 +6245,7 @@ bool Create() {
     // (re)add its icons so the bar gets the ones that already exist.
     ChangeWindowMessageFilterEx(g_bar, WM_COPYDATA, MSGFLT_ALLOW, nullptr);
     Tray::RequestIcons();
+    SetTimer(g_bar, kWarmTimer, 1500, nullptr);  // Panels::Warm, once the bar has settled
     // Square corners on Windows 11 (DWMWA_WINDOW_CORNER_PREFERENCE = DWMWCP_DONOTROUND).
     // Fails harmlessly on Windows 10.
     const DWORD cornerPreference = 1;
@@ -7147,7 +7168,13 @@ void SetHooks(bool on) {
     if (g_inputThreadId) PostThreadMessageW(g_inputThreadId, WM_NULL, 0, 0);
 }
 
+namespace Material {
+void StartPrefetch();
+void StopPrefetch();
+}  // namespace Material
+
 void StartThreads() {
+    Material::StartPrefetch();
     g_jobEvent = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     g_workerThread = CreateThread(nullptr, 0, WorkerProc, nullptr, 0, nullptr);
     g_inputThread = CreateThread(nullptr, 0, InputThreadProc, nullptr, 0, &g_inputThreadId);
@@ -7155,6 +7182,7 @@ void StartThreads() {
 
 // Called after g_stopEvent is set.
 void StopThreads() {
+    Material::StopPrefetch();
     if (g_inputThreadId) PostThreadMessageW(g_inputThreadId, WM_QUIT, 0, 0);
     for (HANDLE* h : {&g_workerThread, &g_inputThread}) {
         if (*h) {
@@ -7796,7 +7824,7 @@ bool EnsureWindow() {
 namespace Material {
 void ReleaseDevice();
 void Release();
-void Capture(const RECT& mon);
+void Use(const RECT& mon);
 }  // namespace Material
 
 void ReleaseSurface() {
@@ -7922,9 +7950,31 @@ float CalCellWidth() {
 // Without a capture the panel falls back to panel-bg-solid.
 namespace Material {
 
-HBITMAP g_shot = nullptr;
-const uint8_t* g_shotBits = nullptr;
-RECT g_shotRect = {};  // screen px
+// The screen behind the panels, captured at 1/kShotScale: after a σ30 blur the
+// lost detail is invisible, and blurring a quarter-size copy is 16x cheaper.
+// GDI needs ~30 ms to read the screen, so while the pointer is on the bar (and
+// no panel is open) a background thread keeps a recent shot ready; a click
+// then opens the panel with it at once. Without a usable one, Open captures.
+constexpr int kShotScale = 4;
+constexpr ULONGLONG kPrefetchEveryMs = 400;  // a fresh shot this often while the pointer is on the bar
+constexpr ULONGLONG kShotMaxAgeMs = 1000;    // older ones are captured again on open
+constexpr ULONGLONG kHideSettleMs = 50;      // a shot must start this long after the panel hid
+
+struct Shot {
+    std::vector<uint32_t> px;  // BGRX, kShotScale x kShotScale blocks averaged
+    int w = 0, h = 0;          // shot pixels
+    RECT mon = {};             // screen px covered
+    ULONGLONG tick = 0;        // when the capture started
+};
+
+std::mutex g_shotMutex;                    // leaf lock: g_cached
+std::shared_ptr<const Shot> g_cached;      // the latest prefetched shot
+std::shared_ptr<const Shot> g_shot;        // the shot the panel uses (render thread)
+std::atomic<ULONGLONG> g_hiddenTick{0};    // when the panel window last hid
+HANDLE g_prefetchThread = nullptr;
+HANDLE g_prefetchWake = nullptr;
+std::atomic<bool> g_prefetchStop{false};
+
 ComPtr<ID2D1Bitmap> g_blurBitmap;
 ComPtr<ID2D1BitmapBrush> g_blurBrush;
 RECT g_blurRect = {};      // panel body the bitmap was built for (screen px)
@@ -7939,21 +7989,22 @@ void ReleaseDevice() {
     g_blurTried = false;
 }
 
+// The panel window hid: its shot goes, and none taken before now (plus a frame)
+// may be used again, as it could show the panel itself.
 void Release() {
     ReleaseDevice();
-    if (g_shot) DeleteObject(g_shot);
-    g_shot = nullptr;
-    g_shotBits = nullptr;
-    g_shotRect = {};
+    g_shot.reset();
+    g_hiddenTick.store(GetTickCount64());
 }
 
-void Capture(const RECT& mon) {
-    Release();
+// Any thread. The monitor at full size, then averaged down to 1/kShotScale.
+std::shared_ptr<const Shot> CaptureShot(const RECT& mon) {
+    const ULONGLONG start = GetTickCount64();
     const int w = mon.right - mon.left;
     const int h = mon.bottom - mon.top;
-    if (w <= 0 || h <= 0) return;
+    if (w < kShotScale || h < kShotScale) return nullptr;
     HDC screen = GetDC(nullptr);
-    if (!screen) return;
+    if (!screen) return nullptr;
     HDC mem = CreateCompatibleDC(screen);
     BITMAPINFO bi = {};
     bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
@@ -7967,20 +8018,110 @@ void Capture(const RECT& mon) {
     bool ok = false;
     if (bmp && bits) {
         HGDIOBJ old = SelectObject(mem, bmp);
-        ok = BitBlt(mem, 0, 0, w, h, screen, mon.left, mon.top, SRCCOPY | CAPTUREBLT) != FALSE;
+        ok = BitBlt(mem, 0, 0, w, h, screen, mon.left, mon.top, SRCCOPY) != FALSE;  // DWM composes layered windows in
         SelectObject(mem, old);
         GdiFlush();
     }
     if (mem) DeleteDC(mem);
     ReleaseDC(nullptr, screen);
-    if (!ok) {
-        if (bmp) DeleteObject(bmp);
+    std::shared_ptr<Shot> shot;
+    if (ok) {
+        shot = std::make_shared<Shot>();
+        shot->w = w / kShotScale;
+        shot->h = h / kShotScale;
+        shot->mon = mon;
+        shot->tick = start;
+        shot->px.resize(static_cast<size_t>(shot->w) * shot->h);
+        const uint8_t* src = static_cast<const uint8_t*>(bits);
+        const size_t stride = static_cast<size_t>(w) * 4;
+        constexpr int kArea = kShotScale * kShotScale;
+        for (int y = 0; y < shot->h; ++y) {
+            for (int x = 0; x < shot->w; ++x) {
+                unsigned sum[3] = {0, 0, 0};
+                for (int dy = 0; dy < kShotScale; ++dy) {
+                    const uint8_t* p = src + (static_cast<size_t>(y) * kShotScale + dy) * stride + x * kShotScale * 4;
+                    for (int dx = 0; dx < kShotScale; ++dx, p += 4) {
+                        sum[0] += p[0];
+                        sum[1] += p[1];
+                        sum[2] += p[2];
+                    }
+                }
+                shot->px[static_cast<size_t>(y) * shot->w + x] =
+                    0xFF000000u | (sum[2] / kArea) << 16 | (sum[1] / kArea) << 8 | (sum[0] / kArea);
+            }
+        }
+    } else {
         Wh_Log(L"Panels: backdrop capture failed (%lu), solid panel.", GetLastError());
-        return;
     }
-    g_shot = bmp;
-    g_shotBits = static_cast<const uint8_t*>(bits);
-    g_shotRect = mon;
+    if (bmp) DeleteObject(bmp);
+    return shot;
+}
+
+// Background thread: while the pointer is on the bar and no panel is shown,
+// keeps g_cached at most kPrefetchEveryMs old. Idle otherwise.
+DWORD WINAPI PrefetchProc(void*) {
+    while (!g_prefetchStop.load()) {
+        WaitForSingleObject(g_prefetchWake, 100);
+        if (g_prefetchStop.load()) break;
+        RECT bar = {};
+        POINT pt = {};
+        if (!TopBar::GetAnchorRect(&bar) || !GetCursorPos(&pt) || !PtInRect(&bar, pt)) continue;
+        if (g_wnd && IsWindowVisible(g_wnd)) continue;
+        const ULONGLONG now = GetTickCount64();
+        {
+            std::lock_guard lock(g_shotMutex);
+            if (g_cached && now - g_cached->tick < kPrefetchEveryMs && now >= g_cached->tick) continue;
+        }
+        MONITORINFO mi = {sizeof(mi)};
+        if (!GetMonitorInfoW(MonitorFromRect(&bar, MONITOR_DEFAULTTONEAREST), &mi)) continue;
+        std::shared_ptr<const Shot> shot = CaptureShot(mi.rcMonitor);
+        if (shot && !(g_wnd && IsWindowVisible(g_wnd))) {  // the panel did not show meanwhile
+            std::lock_guard lock(g_shotMutex);
+            g_cached = std::move(shot);
+        }
+    }
+    return 0;
+}
+
+void StartPrefetch() {
+    g_prefetchStop.store(false);
+    g_prefetchWake = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    g_prefetchThread = CreateThread(nullptr, 0, PrefetchProc, nullptr, 0, nullptr);
+}
+
+void StopPrefetch() {
+    g_prefetchStop.store(true);
+    if (g_prefetchWake) SetEvent(g_prefetchWake);
+    if (g_prefetchThread) {
+        WaitForSingleObject(g_prefetchThread, 3000);
+        CloseHandle(g_prefetchThread);
+    }
+    if (g_prefetchWake) CloseHandle(g_prefetchWake);
+    g_prefetchThread = g_prefetchWake = nullptr;
+    std::lock_guard lock(g_shotMutex);
+    g_cached.reset();
+}
+
+// The pointer moved on the bar: a fresh shot soon, if the current one is old.
+void Prefetch() {
+    if (g_prefetchWake) SetEvent(g_prefetchWake);
+}
+
+// Open, panel window hidden: the prefetched shot if it is recent, of this
+// monitor and taken after the panel last hid; otherwise one captured now.
+void Use(const RECT& mon) {
+    ReleaseDevice();
+    std::shared_ptr<const Shot> shot;
+    {
+        std::lock_guard lock(g_shotMutex);
+        shot = g_cached;
+    }
+    const ULONGLONG now = GetTickCount64();
+    if (!shot || !EqualRect(&shot->mon, &mon) || now - shot->tick > kShotMaxAgeMs ||
+        shot->tick < g_hiddenTick.load() + kHideSettleMs) {
+        shot = CaptureShot(mon);
+    }
+    g_shot = std::move(shot);
 }
 
 // Radii of three box blurs whose sum approximates a Gaussian of `sigma`.
@@ -8013,27 +8154,32 @@ void BoxPass(const uint8_t* src, uint8_t* dst, int count, int lines, size_t step
     }
 }
 
-// Builds the material bitmap for the panel body (screen px). Cached per rect.
+// Builds the material bitmap for the panel body (screen px), in shot pixels.
+// Cached per rect.
 bool Build(const RECT& body, float sigma) {
     if (g_blurTried && EqualRect(&body, &g_blurRect)) return g_blurBrush != nullptr;
     ReleaseDevice();
     g_blurRect = body;
     g_blurTried = true;
-    if (!g_shot || !g_rt) return false;
+    const Shot* shot = g_shot.get();
+    if (!shot || !g_rt) return false;
+    constexpr int F = kShotScale;
     int radii[3];
-    BoxRadii(sigma, radii);
+    BoxRadii(sigma / F, radii);
     const int margin = radii[0] + radii[1] + radii[2] + 1;
-    RECT src = {body.left - margin, body.top - margin, body.right + margin, body.bottom + margin};
+    // The body in shot pixels (rounded outwards), then the blur's margin.
+    const RECT inShot = {(body.left - shot->mon.left) / F, (body.top - shot->mon.top) / F,
+                         (body.right - shot->mon.left + F - 1) / F, (body.bottom - shot->mon.top + F - 1) / F};
+    const RECT whole = {0, 0, shot->w, shot->h};
+    RECT src = {inShot.left - margin, inShot.top - margin, inShot.right + margin, inShot.bottom + margin};
     RECT crop = {};
-    if (!IntersectRect(&src, &src, &g_shotRect) || !IntersectRect(&crop, &body, &g_shotRect)) return false;
+    if (!IntersectRect(&src, &src, &whole) || !IntersectRect(&crop, &inShot, &whole)) return false;
     const int w = src.right - src.left;
     const int h = src.bottom - src.top;
     const size_t stride = static_cast<size_t>(w) * 4;
-    const size_t shotStride = static_cast<size_t>(g_shotRect.right - g_shotRect.left) * 4;
     std::vector<uint8_t> a(stride * h), b(stride * h);
     for (int y = 0; y < h; ++y) {
-        memcpy(&a[y * stride],
-               g_shotBits + (src.top - g_shotRect.top + y) * shotStride + (src.left - g_shotRect.left) * 4, stride);
+        memcpy(&a[y * stride], &shot->px[static_cast<size_t>(src.top + y) * shot->w + src.left], stride);
     }
     for (int r : radii) {
         BoxPass(a.data(), b.data(), w, h, 4, stride, r);  // rows
@@ -8085,12 +8231,12 @@ bool Build(const RECT& body, float sigma) {
         g_blurBitmap.Reset();
         return false;
     }
-    g_blurOrigin = {crop.left, crop.top};
+    g_blurOrigin = {shot->mon.left + crop.left * F, shot->mon.top + crop.top * F};
     return true;
 }
 
 // Fills the panel shape (drawn under `base`) with the material. False: no
-// capture, the caller paints panel-bg-solid.
+// shot, the caller paints panel-bg-solid.
 bool Fill(const D2D1_ROUNDED_RECT& shape, const D2D1_MATRIX_3X2_F& base) {
     const LONG left = g.wx + std::lround(g.marginX);
     const LONG top = g.wy + std::lround(g.marginTop);
@@ -8099,9 +8245,11 @@ bool Fill(const D2D1_ROUNDED_RECT& shape, const D2D1_MATRIX_3X2_F& base) {
     if (!Build(body, Design::kPanelBlurStdDev * g.scale)) return false;
     D2D1_MATRIX_3X2_F inverse = base;
     if (!D2D1InvertMatrix(&inverse)) return false;
-    // Bitmap px -> window px, then back through the panel transform: the
-    // backdrop stays where it is on screen whatever the panel's scale and dy.
-    g_blurBrush->SetTransform(D2D1::Matrix3x2F::Translation(static_cast<float>(g_blurOrigin.x - g.wx),
+    // Shot px -> screen size (x kShotScale) -> window px, then back through the
+    // panel transform: the backdrop stays where it is on screen whatever the
+    // panel's scale and dy.
+    g_blurBrush->SetTransform(D2D1::Matrix3x2F::Scale(static_cast<float>(kShotScale), static_cast<float>(kShotScale)) *
+                              D2D1::Matrix3x2F::Translation(static_cast<float>(g_blurOrigin.x - g.wx),
                                                             static_cast<float>(g_blurOrigin.y - g.wy)) *
                               *D2D1::Matrix3x2F::ReinterpretBaseType(&inverse));
     g_rt->FillRoundedRectangle(shape, g_blurBrush.Get());
@@ -8109,6 +8257,11 @@ bool Fill(const D2D1_ROUNDED_RECT& shape, const D2D1_MATRIX_3X2_F& base) {
 }
 
 }  // namespace Material
+
+// The pointer is on the bar: have a recent backdrop shot ready for a click.
+void PrefetchBackdrop() {
+    Material::Prefetch();
+}
 
 void DrawShadow(D2D1_RECT_F body) {
     // shadow-panel: 0 12 36 rgba(0,0,0,.45), drawn as stacked rounded rects (a DC
@@ -8543,7 +8696,44 @@ void Close(bool animate) {
 
 // Opens `item`'s panel. animate = false is menu tracking: the new panel replaces
 // the old one in the same frame, at rest.
+// Diagnostics (tests): how long the last Open took, stage by stage, in µs.
+// Written to %TEMP%\dynamic-island-panel-timing.txt on Tray::kTimings.
+struct OpenTiming {
+    double build = 0, place = 0, capture = 0, render = 0, show = 0, total = 0;
+    int item = -1;
+} g_openTiming;
+int g_warmState = 0;      // 0 not run, 1 done, -1 skipped (busy / not placed)
+double g_warmMicros = 0;
+
+double MicrosSince(LARGE_INTEGER from) {
+    LARGE_INTEGER now, freq;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    return (now.QuadPart - from.QuadPart) * 1e6 / static_cast<double>(freq.QuadPart);
+}
+
+void DumpTimings() {
+    wchar_t dir[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, dir);
+    char text[256];
+    snprintf(text, sizeof(text),
+             "item=%d build=%.0f place=%.0f capture=%.0f render=%.0f show=%.0f total=%.0f us | warm=%d %.0f us\r\n",
+             g_openTiming.item, g_openTiming.build, g_openTiming.place, g_openTiming.capture, g_openTiming.render,
+             g_openTiming.show, g_openTiming.total, g_warmState, g_warmMicros);
+    HANDLE h = CreateFileW((std::wstring(dir) + L"dynamic-island-panel-timing.txt").c_str(), GENERIC_WRITE, 0, nullptr,
+                           CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h != INVALID_HANDLE_VALUE) {
+        DWORD written = 0;
+        WriteFile(h, text, static_cast<DWORD>(strlen(text)), &written, nullptr);
+        CloseHandle(h);
+    }
+}
+
 void Open(int item, bool animate) {
+    LARGE_INTEGER openStart;
+    QueryPerformanceCounter(&openStart);
+    g_openTiming = OpenTiming{};
+    g_openTiming.item = item;
     if (!HasPanel(item) || !TopBar::g_metrics.valid || !TopBar::g_metrics.present[item] ||
         TopBar::g_items[item].hidden || !EnsureWindow()) {
         return;
@@ -8593,6 +8783,7 @@ void Open(int item, bool animate) {
         g.slider.Reset(Audio::Level());
     }
     BuildRows();
+    g_openTiming.build = MicrosSince(openStart);
     if (!Place()) {
         g.open = false;
         g.item = -1;
@@ -8608,12 +8799,17 @@ void Open(int item, bool animate) {
     InvalidateBar();
     // materials.panel: the backdrop is captured before the window shows; a
     // visible window (menu tracking, ← / →, reopening while closing) keeps it.
-    if (!IsWindowVisible(g_wnd)) Material::Capture(TopBar::g_monitorRect);
+    g_openTiming.place = MicrosSince(openStart);
+    if (!IsWindowVisible(g_wnd)) Material::Use(TopBar::g_monitorRect);
+    g_openTiming.capture = MicrosSince(openStart);
     RenderCurrent();
+    g_openTiming.render = MicrosSince(openStart);
     SetWindowPos(g_wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    g_openTiming.show = MicrosSince(openStart);
     g.lastTick = NowSeconds();
     g_menuKeys = g.menu;
     SetHooks(true);
+    g_openTiming.total = MicrosSince(openStart);
 }
 
 // ── Shell flyouts ────────────────────────────────────────────────────────────
@@ -8670,6 +8866,38 @@ bool FlyoutGone(HWND hwnd) {
     if (!hwnd || !IsWindow(hwnd) || !IsWindowVisible(hwnd)) return true;
     DWORD cloaked = 0;
     return SUCCEEDED(DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &cloaked, sizeof(cloaked))) && cloaked != 0;
+}
+
+// The first open would otherwise load fonts and glyph caches and let Direct2D
+// prepare its shapes (~40-120 ms more): once the bar has settled, a panel and a
+// menu are rendered once, glass and all, into the hidden window and dropped.
+bool Warm() {
+    LARGE_INTEGER start;
+    QueryPerformanceCounter(&start);
+    if (g.open || g.closing || g.item >= 0 || !EnsureWindow() || IsWindowVisible(g_wnd)) return false;
+    bool placed = false;
+    bool captured = false;
+    // A panel (Wi-Fi: header, switch, sections, rows) and a menu (the logo's):
+    // both are always on the bar.
+    for (int item : {static_cast<int>(BarContent::kNetwork), static_cast<int>(BarContent::kLogo)}) {
+        g.item = item;
+        BuildRows();
+        if (!Place()) continue;
+        if (!captured) Material::Use(TopBar::g_monitorRect);
+        captured = true;
+        Render(0.0f, 1.0f, 0.0f);  // UpdateLayeredWindow on a hidden window: nothing shows
+        placed = true;
+    }
+    if (captured) Material::Release();
+    {
+        std::lock_guard lock(g_bodyMutex);
+        g_bodyRect = {};
+    }
+    g.rows.clear();
+    g.item = -1;
+    g_warmState = placed ? 1 : -1;
+    g_warmMicros = MicrosSince(start);
+    return placed;
 }
 
 void Toggle(int item) {
@@ -12159,7 +12387,58 @@ void PushAudioChunks(BYTE* data, UINT32 frames, WAVEFORMATEX* format) {
 }
 
 // --- Weather Fetching Helpers ---
-std::string HttpGet(const wchar_t* host, const wchar_t* path, bool https = true) {
+std::string HttpGet(const wchar_t* host, const wchar_t* path, bool https = true);
+
+// The city in the UI language. wttr.in names places in English only, so the
+// name is looked up once per city and language in Open-Meteo's geocoder (only
+// the name is sent, no coordinates), taking the match nearest to wttr.in's own
+// coordinates and only within 50 km. Weather thread; English as the fallback.
+std::wstring LocalizedCityName(const std::wstring& city, const std::string& lang, double lat, double lon, bool haveCoords) {
+    if (lang.empty() || city.empty()) return city;
+    static std::unordered_map<std::wstring, std::wstring> cache;
+    const std::wstring wlang(lang.begin(), lang.end());
+    const std::wstring key = city + L"|" + wlang;
+    if (auto it = cache.find(key); it != cache.end()) return it->second;
+    const std::wstring path = L"/v1/search?count=10&format=json&language=" + wlang + L"&name=" + PercentEncodeUtf8(city);
+    const std::string body = HttpGet(L"geocoding-api.open-meteo.com", path.c_str(), true);
+    if (body.empty()) return city;  // offline: try again with the next weather update
+    std::wstring result = city;
+    double best = 50.0;  // km
+    size_t pos = 0;
+    while ((pos = body.find("\"name\":\"", pos)) != std::string::npos) {
+        pos += 8;
+        const size_t end = body.find('"', pos);
+        if (end == std::string::npos) break;
+        const std::string name = body.substr(pos, end - pos);
+        pos = end;
+        const size_t la = body.find("\"latitude\":", pos);
+        const size_t lo = body.find("\"longitude\":", pos);
+        if (la == std::string::npos || lo == std::string::npos) break;
+        if (name.empty() || name.find('\\') != std::string::npos) continue;  // escaped text: not worth decoding
+        const double plat = atof(body.c_str() + la + 11);
+        const double plon = atof(body.c_str() + lo + 12);
+        double km = 0.0;
+        if (haveCoords) {
+            const double dx = (plon - lon) * std::cos(lat * 3.14159265358979 / 180.0) * 111.32;
+            const double dy = (plat - lat) * 110.57;
+            km = std::sqrt(dx * dx + dy * dy);
+        }
+        if (km < best || !haveCoords) {
+            best = km;
+            const int n = MultiByteToWideChar(CP_UTF8, 0, name.c_str(), static_cast<int>(name.size()), nullptr, 0);
+            if (n > 0) {
+                std::wstring wide(static_cast<size_t>(n), L'\0');
+                MultiByteToWideChar(CP_UTF8, 0, name.c_str(), static_cast<int>(name.size()), wide.data(), n);
+                result = std::move(wide);
+            }
+            if (!haveCoords) break;  // no position to compare with: the geocoder's first match
+        }
+    }
+    cache[key] = result;
+    return result;
+}
+
+std::string HttpGet(const wchar_t* host, const wchar_t* path, bool https) {
     std::string response;
     HINTERNET hSession = WinHttpOpen(L"DynamicIsland/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) {
@@ -12378,6 +12657,26 @@ DWORD WINAPI WeatherThreadProc(void*) {
             std::wstring humidity = L"";
             std::wstring feelsLike = L"";
             std::wstring cityLabel = L"Local Weather";
+            // wttr.in's position for the place (nearest_area), to pick the right
+            // localized name: "latitude": "42.873".
+            double areaLat = 0.0, areaLon = 0.0;
+            bool haveCoords = false;
+            if (const char* area = strstr(wRes.c_str(), "\"nearest_area\"")) {
+                const char* la = strstr(area, "\"latitude\"");
+                const char* lo = strstr(area, "\"longitude\"");
+                auto number = [](const char* at) {
+                    at = strchr(at, ':');
+                    if (!at) return 0.0;
+                    ++at;
+                    while (*at == ' ' || *at == '\"') ++at;
+                    return atof(at);
+                };
+                if (la && lo) {
+                    areaLat = number(la);
+                    areaLon = number(lo);
+                    haveCoords = areaLat != 0.0 || areaLon != 0.0;
+                }
+            }
 
             const char* areaStr = strstr(wRes.c_str(), "\"areaName\":");
             if (areaStr) {
@@ -12478,13 +12777,16 @@ DWORD WINAPI WeatherThreadProc(void*) {
                 Wh_Log(L"Weather: Failed to find \"current_condition\" in response.");
             }
 
+            const std::wstring shownCity =
+                weatherCommitted ? LocalizedCityName(cityOverride.empty() ? cityLabel : cityOverride, wttrLang, areaLat,
+                                                     areaLon, haveCoords)
+                                 : std::wstring();
             if (weatherCommitted) {
                 std::lock_guard lock(g_stateMutex);
                 g_state.weather.hasData = true;
                 g_state.weather.temperature = temp;
                 g_state.weather.weatherCode = code;
-                if (!cityOverride.empty()) g_state.weather.city = cityOverride;
-                else g_state.weather.city = cityLabel;
+                g_state.weather.city = shownCity;
                 g_state.weather.weatherDesc = desc;
                 g_state.weather.windSpeed = windSpeed;
                 g_state.weather.windDir = windDir;
