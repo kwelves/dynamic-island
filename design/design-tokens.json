@@ -267,6 +267,15 @@
      1.0
     ]
    },
+   "tile-divider-on": {
+    "hex": "#FFFFFF4D",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.3
+    ]
+   },
    "accent-text": {
     "hex": "#409CFFFF",
     "rgba": [
@@ -566,6 +575,15 @@
      1.0
     ]
    },
+   "tile-divider-on": {
+    "hex": "#FFFFFF4D",
+    "rgba": [
+     1.0,
+     1.0,
+     1.0,
+     0.3
+    ]
+   },
    "accent-text": {
     "hex": "#0060CCFF",
     "rgba": [
@@ -683,6 +701,22 @@
     "px": 10,
     "source": "замер"
    },
+   "tile-label-gap": {
+    "px": 6,
+    "source": "решение"
+   },
+   "tile-dot-gap": {
+    "px": 6,
+    "source": "решение"
+   },
+   "tooltip-pad-x": {
+    "px": 8,
+    "source": "решение"
+   },
+   "tooltip-pad-y": {
+    "px": 4,
+    "source": "решение"
+   },
    "menu-pad-y": {
     "px": 5,
     "source": "замер"
@@ -780,6 +814,14 @@
    "radius-switch": {
     "px": 9,
     "source": "замер"
+   },
+   "radius-tile": {
+    "px": 12,
+    "source": "решение"
+   },
+   "radius-tooltip": {
+    "px": 6,
+    "source": "решение"
    }
   },
   "size": {
@@ -878,6 +920,54 @@
    "panel-w": {
     "px": 300,
     "source": "замер"
+   },
+   "qs-w": {
+    "px": 316,
+    "source": "решение"
+   },
+   "qs-max-h": {
+    "px": 560,
+    "source": "решение"
+   },
+   "tile-w": {
+    "px": 88,
+    "source": "решение"
+   },
+   "tile-h": {
+    "px": 48,
+    "source": "решение"
+   },
+   "tile-chevron-w": {
+    "px": 32,
+    "source": "решение"
+   },
+   "tile-label-h": {
+    "px": 28,
+    "source": "решение"
+   },
+   "tile-dot": {
+    "px": 6,
+    "source": "решение"
+   },
+   "slider-side-btn-w": {
+    "px": 32,
+    "source": "решение"
+   },
+   "qs-footer-h": {
+    "px": 40,
+    "source": "решение"
+   },
+   "qs-footer-btn": {
+    "px": 32,
+    "source": "решение"
+   },
+   "page-back-btn": {
+    "px": 28,
+    "source": "решение"
+   },
+   "scrollbar-w": {
+    "px": 4,
+    "source": "решение"
    },
    "menu-min-w": {
     "px": 220,
@@ -1635,6 +1725,13 @@
    "use": "Ссылки «Настройки…»",
    "verifiedInMsDocs": true
   },
+  "edit": {
+   "codepoint": "U+E70F",
+   "cpp": "L\"ç0F\"",
+   "fluentName": "Edit",
+   "use": "Быстрые настройки: «Изменить плитки» (карандаш)",
+   "verifiedInMsDocs": true
+  },
   "lock": {
    "codepoint": "U+E72E",
    "cpp": "L\"\\xE72E\"",
@@ -2022,5 +2119,32 @@
   "notify_hold_ms": 4000,
   "hover_open_dwell_ms": 400,
   "menu_tracking_switch_ms": 0
+ },
+ "quickSettings": {
+  "source": "решение",
+  "tooltipDelay": "GetDoubleClickTime() — 500 мс по умолчанию, как у подсказок Windows",
+  "tooltipStyle": "фон panel-bg-solid, обводка panel-rim 1 px, radius-tooltip, поля tooltip-pad-x × tooltip-pad-y, текст panel-caption ink-1; верх = низ бара + panel-gap, по центру значка, в пределах экрана; появление panel.fade",
+  "wheelVolumeStepPct": 2,
+  "tileColumns": 3,
+  "tileRowsPerPage": 2,
+  "tileGap": "panel-row-gap",
+  "tileOff": "fill-off",
+  "tileOn": "accent",
+  "tileGlyph": "bar-icon",
+  "tileLabel": "panel-caption, ink-1, по центру, до 2 строк",
+  "motion": {
+   "barToPanel": "panel.open (прямоугольник и радиус плашки → панель), panel.fade, контент через content_in_after_shell_ms пружиной island.content",
+   "panelToBar": "island.content.out, затем island.collapse",
+   "pageForward": "рамка и плитка→заголовок: panel.open; остальное: island.content.out (scale 0.96); новое: через 70 мс island.content",
+   "pageBack": "то же обратно, рамка island.collapse",
+   "tilePages": "bar.items",
+   "reorder": "bar.items"
+  },
+  "scroll": {
+   "wheelRows": 3,
+   "decelerationPerMs": 0.998,
+   "edge": "резинка, возврат bar.items",
+   "scrollbar": "scrollbar-w, ink-3, только во время прокрутки"
+  }
  }
 }

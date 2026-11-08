@@ -4412,6 +4412,32 @@ constexpr float kMenuShortcutLitAlpha = 0.8f;  // .mb-mi:hover .mb-mi-key opacit
 constexpr double kMenuBlinkOffSec = 0.070;     // motion.md: the chosen item blinks 70 ms
 constexpr double kMenuBlinkOnSec = 0.060;      //            and the menu closes 60 ms later
 
+// Quick settings (components.md "Быстрые настройки"; tokens with source "решение"):
+// наше решение, approved 8 Nov 2026.
+constexpr float kQsW = 316.0f;                 // qs-w = 16 + 3 x 88 + 2 x 10 + 16
+constexpr float kQsMaxH = 560.0f;              // qs-max-h
+constexpr float kTileW = 88.0f;                // tile-w
+constexpr float kTileH = 48.0f;                // tile-h
+constexpr float kRadiusTile = 12.0f;           // radius-tile
+constexpr float kTileChevronW = 32.0f;         // tile-chevron-w (split tile: 56 | 32)
+constexpr float kTileLabelGap = 6.0f;          // tile-label-gap
+constexpr float kTileLabelH = 28.0f;           // tile-label-h (2 panel-caption lines)
+constexpr float kTileDot = 6.0f;               // tile-dot
+constexpr float kTileDotGap = 6.0f;            // tile-dot-gap
+constexpr int kTileColumns = 3;                // quickSettings.tileColumns
+constexpr int kTileRowsPerPage = 2;            // quickSettings.tileRowsPerPage
+constexpr float kSliderSideBtnW = 32.0f;       // slider-side-btn-w
+constexpr float kQsFooterH = 40.0f;            // qs-footer-h
+constexpr float kQsFooterBtn = 32.0f;          // qs-footer-btn
+constexpr float kPageBackBtn = 28.0f;          // page-back-btn
+constexpr float kScrollbarW = 4.0f;            // scrollbar-w
+constexpr int kScrollWheelRows = 3;            // quickSettings.scroll.wheelRows
+constexpr float kScrollDecelPerMs = 0.998f;    // quickSettings.scroll.decelerationPerMs
+constexpr float kTooltipPadX = 8.0f;           // tooltip-pad-x
+constexpr float kTooltipPadY = 4.0f;           // tooltip-pad-y
+constexpr float kRadiusTooltip = 6.0f;         // radius-tooltip
+constexpr int kWheelVolumeStepPct = 2;         // quickSettings.wheelVolumeStepPct
+
 // island.states
 struct IslandState {
     float w;
@@ -4434,6 +4460,7 @@ constexpr D2D1_COLOR_F kGlassTint{0.0784f, 0.0784f, 0.0863f, 0.36f}; // bar-glas
 constexpr D2D1_COLOR_F kGlassInk{1.0f, 1.0f, 1.0f, 1.0f};            // bar-glass-ink
 constexpr D2D1_COLOR_F kAccent{0.0392f, 0.5176f, 1.0f, 1.0f};        // accent
 constexpr D2D1_COLOR_F kOnAccent{1.0f, 1.0f, 1.0f, 1.0f};            // on-accent
+constexpr D2D1_COLOR_F kTileDividerOn{1.0f, 1.0f, 1.0f, 0.3f};       // tile-divider-on (наше решение)
 constexpr D2D1_COLOR_F kRed{1.0f, 0.2706f, 0.2275f, 1.0f};           // red
 constexpr D2D1_COLOR_F kIslandTrack{1.0f, 1.0f, 1.0f, 0.2f};         // island-track
 constexpr D2D1_COLOR_F kBarHighlight{1.0f, 1.0f, 1.0f, 0.22f};       // bar-highlight
@@ -4514,6 +4541,7 @@ constexpr wchar_t kGlyphBatteryCharging[11] = {0xE85A, 0xE85B, 0xE85C, 0xE85D, 0
 constexpr wchar_t kGlyphBrightness = 0xE706;  // weather: clear
 constexpr wchar_t kGlyphCloud = 0xE753;       // weather: cloudy
 constexpr wchar_t kGlyphSettings = 0xE713;
+constexpr wchar_t kGlyphEdit = 0xE70F;  // edit (наше решение): quick settings "edit tiles"
 constexpr wchar_t kGlyphLock = 0xE72E;
 constexpr wchar_t kGlyphCheckmark = 0xE73E;
 constexpr wchar_t kGlyphChevronRight = 0xE76C;
